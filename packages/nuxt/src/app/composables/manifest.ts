@@ -1,0 +1,87 @@
+import type { AppRouteRules, NuxtRequestEvent } from '@nuxt/schema'
+import { withoutBase } from 'ufo'
+import { useRuntimeConfig } from '../nuxt'
+import { manifestDiagnostics } from '../diagnostics/manifest'
+import { appManifest as isAppManifestEnabled } from '#build/nuxt.config.mjs'
+import { buildAssetsURL } from '#internal/nuxt/paths'
+import _routeRulesMatcher from '#build/route-rules.mjs'
+
+// hoisted so a circular import cannot hit the TDZ of the `#build/route-rules.mjs` default export
+function routeRulesMatcher (path: string): AppRouteRules {
+  return (_routeRulesMatcher as (path: string) => AppRouteRules)(path)
+}
+
+export interface NuxtAppManifestMeta {
+  id: string
+  timestamp: number
+}
+
+export interface NuxtAppManifest extends NuxtAppManifestMeta {
+  prerendered: string[]
+}
+
+let manifest: Promise<NuxtAppManifest> | undefined
+
+function fetchManifest (): Promise<NuxtAppManifest> {
+  if (!isAppManifestEnabled) {
+    throw manifestDiagnostics.NUXT_E5001()
+  }
+  let _manifest: Promise<NuxtAppManifest>
+  if (import.meta.server) {
+    _manifest = import(/* webpackIgnore: true */ /* @vite-ignore */ '#app-manifest') as unknown as Promise<NuxtAppManifest>
+  } else {
+    // Low priority so this background warm-up does not contend with LCP-critical resources.
+    // `keepalive` stops WebKit cancelling (and rejecting) the request when the page is left.
+    _manifest = fetch(buildAssetsURL(`builds/meta/${useRuntimeConfig().app.buildId}.json`), { priority: 'low', keepalive: true })
+      .then((res) => {
+        // native `fetch` resolves non-2xx responses; surface them with a `status` so callers
+        // (e.g. the outdated-build check) can distinguish a missing manifest from a bad payload
+        if (!res.ok) {
+          const error = new Error(`[nuxt] Could not fetch app manifest: ${res.status} ${res.statusText}`) as Error & { status: number }
+          error.status = res.status
+          throw error
+        }
+        return res.json()
+      })
+      .then((res: NuxtAppManifest) => {
+        // handle errors fetching manifest, e.g. from an improperly configured proxy
+        if (!res || typeof res !== 'object' || !Array.isArray(res.prerendered)) {
+          throw manifestDiagnostics.NUXT_E5004()
+        }
+        return res
+      })
+  }
+  manifest = _manifest
+  _manifest.catch((e) => {
+    // Reset so subsequent calls to getAppManifest() retry instead of
+    // returning the same rejected promise permanently.
+    if (manifest === _manifest) {
+      manifest = undefined
+    }
+    manifestDiagnostics.NUXT_E5002({ cause: e })
+  })
+  return _manifest
+}
+
+/** @since 3.7.4 */
+export function getAppManifest (): Promise<NuxtAppManifest> {
+  if (!isAppManifestEnabled) {
+    throw manifestDiagnostics.NUXT_E5001()
+  }
+  return manifest || fetchManifest()
+}
+
+/** @since 3.7.4 */
+export function getRouteRules (event: NuxtRequestEvent): AppRouteRules
+export function getRouteRules (options: { path: string }): Record<string, any>
+/** @deprecated use `getRouteRules({ path })` instead */
+export function getRouteRules (url: string): Record<string, any>
+export function getRouteRules (arg: string | NuxtRequestEvent | { path: string }) {
+  const path = typeof arg === 'string' ? arg : 'url' in arg ? withoutBase(arg.url.pathname, useRuntimeConfig().app.baseURL) : arg.path
+  try {
+    return routeRulesMatcher(path)
+  } catch (e) {
+    manifestDiagnostics.NUXT_E5003({ path, cause: e })
+    return {}
+  }
+}

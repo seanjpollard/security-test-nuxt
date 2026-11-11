@@ -1,0 +1,419 @@
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { dirname, join, normalize, resolve } from 'pathe'
+import { resolveModulePath } from 'exsolve'
+import { withoutTrailingSlash } from 'ufo'
+import { defu } from 'defu'
+import { logger, resolvePath, tryUseNuxt, useNuxt } from '@nuxt/kit'
+import { findWorkspaceDir } from 'pkg-types'
+import { _generateTypes } from '../../kit/src/template.ts'
+import { configDiagnostics } from '@nuxt/kit/internal'
+import { loadNuxt } from '../src/index.ts'
+import type { NitroConfig, NuxtConfig } from '../schema.ts'
+
+const repoRoot = await findWorkspaceDir()
+
+vi.stubGlobal('console', {
+  ...console,
+  error: vi.fn(console.error),
+  warn: vi.fn(console.warn),
+})
+
+const loggerWarn = vi.spyOn(logger, 'warn')
+vi.mock('pkg-types', async (og) => {
+  const originalPkgTypes = (await og<typeof import('pkg-types')>())
+  return {
+    ...originalPkgTypes,
+    readPackageJSON: vi.fn(originalPkgTypes.readPackageJSON),
+  }
+})
+
+beforeEach(() => {
+  loggerWarn.mockClear()
+})
+afterEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('loadNuxt', () => {
+  it('resolves layer runtime imports through the consuming app', async () => {
+    const layerDir = mkdtempSync(join(tmpdir(), 'nuxt-layer-runtime-'))
+    onTestFinished(() => rmSync(layerDir, { recursive: true, force: true }))
+    const layerNuxtDir = join(layerDir, 'node_modules/nuxt')
+    mkdirSync(layerNuxtDir, { recursive: true })
+    writeFileSync(join(layerNuxtDir, 'package.json'), JSON.stringify({
+      name: 'nuxt',
+      type: 'module',
+      exports: { './app': './app.ts' },
+    }))
+    writeFileSync(join(layerNuxtDir, 'app.ts'), 'export const runtime = "layer"')
+
+    const nuxt = await loadNuxt({ cwd: repoRoot })
+    onTestFinished(() => nuxt.close())
+    const resolverOptions = { cwd: layerDir, alias: nuxt.options.alias }
+
+    expect(await resolvePath('nuxt/app', resolverOptions)).toBe(await resolvePath('#app', resolverOptions))
+  })
+
+  it('preserves a custom runtime import alias', async () => {
+    const customRuntime = resolve(repoRoot, 'packages/nuxt/src/app/composables/router.ts')
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      overrides: { alias: { 'nuxt/app': customRuntime } },
+    })
+    onTestFinished(() => nuxt.close())
+
+    expect(await resolvePath('nuxt/app', { alias: nuxt.options.alias })).toBe(customRuntime)
+  })
+
+  it.each([
+    [{ staticRoutes: true }, true],
+    [{ staticRoutes: true, early404: false }, false],
+  ])('derives early404 from %o in overrides', async (experimental, early404) => {
+    const nuxt = await loadNuxt({ cwd: repoRoot, overrides: { experimental } })
+    onTestFinished(() => nuxt.close())
+    expect(nuxt.options.experimental.early404).toBe(early404)
+  })
+
+  it('respects hook overrides', async () => {
+    let hookRan = false
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      ready: true,
+      overrides: {
+        hooks: {
+          ready () {
+            hookRan = true
+          },
+        },
+      },
+    })
+    await nuxt.close()
+    expect(hookRan).toBe(true)
+  })
+
+  it('ensures layer CSS remains in order', async () => {
+    const layerFixtureDir = withoutTrailingSlash(normalize(fileURLToPath(new URL('./layers-fixture', import.meta.url))))
+    const nuxt = await loadNuxt({
+      cwd: layerFixtureDir,
+      overrides: {
+        css: ['override.css'],
+      },
+    })
+    await nuxt.close()
+
+    expect(nuxt.options.css).toMatchInlineSnapshot(`
+      [
+        "custom.css",
+        "auto.css",
+        "final-project.css",
+        "duplicate.css",
+        "override.css",
+        "new-css-added-by-module.css",
+      ]
+    `)
+  })
+
+  it('load multiple nuxt', async () => {
+    await Promise.all([
+      loadNuxt({
+        cwd: repoRoot,
+      }),
+      loadNuxt({
+        cwd: repoRoot,
+      }),
+    ])
+    expect(loggerWarn).not.toHaveBeenCalled()
+  })
+
+  it('reports experimental options that were removed', async () => {
+    const report = vi.spyOn(configDiagnostics, 'NUXT_B5030').mockImplementation(() => ({}) as any)
+    await loadNuxt({
+      cwd: repoRoot,
+      overrides: { experimental: { viteEnvironmentApi: true, renderJsonPayloads: false, asyncContext: true } as NuxtConfig['experimental'] },
+    })
+    expect(report).toHaveBeenCalledOnce()
+    expect(report).toHaveBeenCalledWith({ options: '`experimental.renderJsonPayloads`, `experimental.viteEnvironmentApi`' })
+    report.mockRestore()
+  })
+
+  it('expect hooks to get the correct context outside of initNuxt', async () => {
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+    })
+
+    // @ts-expect-error - random hook
+    nuxt.hook('test', () => {
+      expect(useNuxt().__name).toBe(nuxt.__name)
+    })
+
+    expect(tryUseNuxt()?.__name).not.toBe(nuxt.__name)
+
+    // second nuxt context
+    const second = await loadNuxt({
+      cwd: repoRoot,
+    })
+
+    expect(second.__name).not.toBe(nuxt.__name)
+    expect(tryUseNuxt()?.__name).not.toBe(nuxt.__name)
+
+    // @ts-expect-error - random hook
+    await nuxt.callHook('test')
+
+    expect(loggerWarn).not.toHaveBeenCalled()
+  })
+
+  it('keeps layer modules in order and includes layer directories in the generated tsconfigs', async () => {
+    const layerFixtureDir = withoutTrailingSlash(normalize(fileURLToPath(new URL('./layers-fixture', import.meta.url))))
+    const nuxt = await loadNuxt({
+      cwd: layerFixtureDir,
+      overrides: { buildDir: join(layerFixtureDir, 'node_modules/.cache/nuxt/.nuxt') },
+      ready: true,
+    })
+    onTestFinished(() => nuxt.close())
+
+    const { serverTsConfig, nodeTsConfig } = await _generateTypes(nuxt)
+    expect((serverTsConfig.include ?? []).some(p => p.replace(/\\/g, '/').includes('layers/auto/server'))).toBe(true)
+    // relative to `typesDir`
+    expect(nodeTsConfig.include).toContain('../nuxt.schema.*')
+    expect(nodeTsConfig.include).toContain('../layers/*/nuxt.schema.*')
+
+    const modules = nuxt.options._installedModules.map(item => item.meta.name ?? item.module.name)
+
+    expect(modules).toMatchInlineSnapshot(`
+      [
+        "customLayerInlineModule",
+        "customLayerModule",
+        "customLayerAutoModule",
+        "autoLayerInlineModule",
+        "autoLayerModule",
+        "autoLayerAutoModule",
+        "projectModule",
+        "projectInlineModule",
+        "css",
+        "projectAutoModule",
+        "@nuxt/devtools-onboard",
+        "nuxt:pages",
+        "nuxt:meta",
+        "nuxt:components",
+        "nuxt:compiler",
+        "nuxt:imports",
+        "nuxt:nuxt-config-schema",
+        "@nuxt/telemetry",
+      ]
+    `)
+  })
+
+  it('does not leak debug mutation proxies into resolved options', async () => {
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      overrides: {
+        experimental: { debugModuleMutation: true },
+        modules: [
+          (_options, nuxt) => {
+            nuxt.options.runtimeConfig = defu(nuxt.options.runtimeConfig, {
+              exampleModule: { apiKey: '' },
+            }) as unknown as typeof nuxt.options.runtimeConfig
+          },
+        ],
+      },
+    })
+
+    expect(() => structuredClone(nuxt.options.runtimeConfig)).not.toThrow()
+
+    await nuxt.close()
+  })
+
+  it('maps `#app-manifest` to a path that does not depend on the build id', async () => {
+    const generate = async (buildId: string) => {
+      const nuxt = await loadNuxt({ cwd: repoRoot, ready: true, overrides: { buildId } })
+      onTestFinished(() => nuxt.close())
+      const { tsConfig, sharedTsConfig, legacyTsConfig } = await _generateTypes(nuxt)
+      return [tsConfig, sharedTsConfig, legacyTsConfig].map(config => config.compilerOptions?.paths?.['#app-manifest'])
+    }
+
+    const first = await generate('first-build')
+    const second = await generate('second-build')
+    for (const paths of first) {
+      expect(paths).toEqual([expect.stringMatching(/\/types\/app-manifest$/)])
+    }
+    expect(second).toEqual(first)
+  })
+
+  it('does not write a stub app manifest when only preparing types', async () => {
+    const buildDir = mkdtempSync(join(tmpdir(), 'nuxt-prepare-manifest-'))
+    onTestFinished(() => rmSync(buildDir, { recursive: true, force: true }))
+    const nuxt = await loadNuxt({ cwd: repoRoot, ready: true, overrides: { _prepare: true, buildDir } })
+    onTestFinished(() => nuxt.close())
+
+    await nuxt.callHook('build:before')
+
+    expect(existsSync(join(buildDir, 'manifest'))).toBe(false)
+  })
+
+  it('resolves crossws types from the copy nitro uses', async () => {
+    const modulesDir = mkdtempSync(join(tmpdir(), 'nuxt-modules-dir-'))
+    mkdirSync(join(modulesDir, 'crossws'), { recursive: true })
+    writeFileSync(join(modulesDir, 'crossws/package.json'), JSON.stringify({ name: 'crossws', version: '0.0.0', types: './index.d.ts' }))
+    writeFileSync(join(modulesDir, 'crossws/index.d.ts'), 'export {}')
+    const nuxt = await loadNuxt({ cwd: repoRoot, ready: true, overrides: { modulesDir: [modulesDir] } })
+    const { tsConfig, serverTsConfig } = await _generateTypes(nuxt)
+
+    const nitroDir = dirname(resolveModulePath('nitro/package.json', { from: pathToFileURL(resolve(repoRoot, 'packages/nitro-server') + '/') }))
+    const typesDir = nuxt.options.typesDir || nuxt.options.buildDir
+    const expected = realpathSync(resolve(nitroDir, '../crossws'))
+    expect(resolve(typesDir, serverTsConfig.compilerOptions?.paths?.crossws?.[0] ?? '')).toBe(expected)
+    expect(resolve(typesDir, tsConfig.compilerOptions?.paths?.crossws?.[0] ?? '')).toBe(expected)
+
+    await nuxt.close()
+    rmSync(modulesDir, { recursive: true, force: true })
+  })
+
+  it('resolves `#server` and, when the project depends on `h3`, `h3/rules` types from the copy nitro uses', async () => {
+    const nuxt = await loadNuxt({ cwd: repoRoot, ready: true })
+    expect(nuxt._dependencies?.has('h3')).toBe(true)
+    const { tsConfig, serverTsConfig, sharedTsConfig, nodeTsConfig } = await _generateTypes(nuxt)
+
+    expect(serverTsConfig.compilerOptions?.paths).toHaveProperty('#server')
+    expect(serverTsConfig.compilerOptions?.paths).toHaveProperty('#server/*')
+
+    const nitroDir = dirname(resolveModulePath('nitro/package.json', { from: pathToFileURL(resolve(repoRoot, 'packages/nitro-server') + '/') }))
+    const h3Dir = realpathSync(resolve(nitroDir, '../h3'))
+    const typesDir = nuxt.options.typesDir || nuxt.options.buildDir
+    for (const config of [tsConfig, serverTsConfig, sharedTsConfig, nodeTsConfig]) {
+      expect(resolve(typesDir, config.compilerOptions?.paths?.['h3/rules']?.[0] ?? '')).toContain(h3Dir + '/')
+    }
+
+    await nuxt.close()
+  })
+
+  it('resolves nitro aliases pointing at bare module specifiers', async () => {
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      ready: true,
+      overrides: {
+        modules: [
+          (_options, nuxt) => {
+            nuxt.options.nitro.alias ||= {}
+            nuxt.options.nitro.alias['#probe/defu'] = 'defu'
+          },
+        ],
+      },
+    })
+
+    const { serverTsConfig } = await _generateTypes(nuxt)
+    const tsConfigPaths = serverTsConfig.compilerOptions?.paths ?? {}
+
+    expect(tsConfigPaths['#probe/defu']?.[0]?.replace(/\\/g, '/')).toMatch(/node_modules\/defu\//)
+
+    await nuxt.close()
+  })
+
+  it('allows modules to enable `experimental.asyncContext`', async () => {
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      ready: true,
+      overrides: {
+        experimental: { asyncContext: false },
+        modules: [
+          (_options, nuxt) => {
+            nuxt.options.experimental.asyncContext = true
+          },
+        ],
+      },
+    })
+
+    const config = { environments: { ssr: {}, client: {} }, plugins: [] as Array<{ name?: string }> }
+    await nuxt.callHook('vite:extend', { config } as any)
+    const pluginNames = config.plugins.flat().map(p => p?.name)
+
+    expect(pluginNames).toContain('nuxt:vue-async-context')
+    expect((nuxt as any)._nitro?.options.experimental?.asyncContext).toBe(true)
+
+    await nuxt.close()
+  })
+
+  it('resolves nitro aliases without a baseUrl', async () => {
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      ready: true,
+      overrides: {
+        nitro: {
+          alias: {
+            '#probe/base-url': './probe-target',
+          },
+          typescript: {
+            tsConfig: {
+              compilerOptions: {
+                baseUrl: 'legacy-base',
+              },
+            },
+          },
+        },
+      },
+    })
+
+    const { serverTsConfig } = await _generateTypes(nuxt)
+    const compilerOptions = serverTsConfig.compilerOptions ?? {}
+    const aliasPath = compilerOptions.paths?.['#probe/base-url']?.[0]
+    await nuxt.close()
+
+    expect(aliasPath).toBe('./probe-target')
+    expect(Reflect.get(compilerOptions, 'baseUrl')).toBeUndefined()
+  })
+
+  it.each([
+    ['global typescript.tsConfig compiler options', {}, true],
+    ['typescript.serverTsConfig over the global tsConfig', { serverTsConfig: { compilerOptions: { noPropertyAccessFromIndexSignature: false } } }, false],
+  ])('applies %s to the server tsconfig', async (_, typescript, expected) => {
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      ready: true,
+      overrides: {
+        typescript: { tsConfig: { compilerOptions: { noPropertyAccessFromIndexSignature: true } }, ...typescript },
+      },
+    })
+    onTestFinished(() => nuxt.close())
+    const { serverTsConfig } = await _generateTypes(nuxt)
+    expect(serverTsConfig.compilerOptions?.noPropertyAccessFromIndexSignature).toBe(expected)
+  })
+
+  it('keeps typescript.serverTsConfig and nitro.typescript.tsConfig in sync', async () => {
+    const nuxt = await loadNuxt({
+      cwd: repoRoot,
+      ready: true,
+      overrides: {
+        nitro: { typescript: { tsConfig: { compilerOptions: { noPropertyAccessFromIndexSignature: false } } } },
+      },
+    })
+    expect(nuxt.options.typescript.serverTsConfig).toBe((nuxt.options.nitro as NitroConfig).typescript!.tsConfig)
+    expect(nuxt.options.typescript.serverTsConfig?.compilerOptions?.noPropertyAccessFromIndexSignature).toBe(false)
+    await nuxt.close()
+  })
+})
+
+const pagesDetectionTests: [test: string, overrides: NuxtConfig, result: NuxtConfig['pages']][] = [
+  ['pages dir', {}, { enabled: true }],
+  ['pages dir empty', { dir: { pages: 'empty-dir' } }, { enabled: false }],
+  ['user config', { pages: false }, { enabled: false }],
+  ['user config', { pages: { enabled: false } }, { enabled: false }],
+  ['user config', { pages: { enabled: true, pattern: '**/*{.vue}' } }, { enabled: true, pattern: '**/*{.vue}' }],
+]
+
+const pagesFixtureDir = withoutTrailingSlash(normalize(fileURLToPath(new URL('./pages-fixture', import.meta.url))))
+describe('pages detection', () => {
+  it.each(pagesDetectionTests)('%s `%s`', async (_, overrides, result) => {
+    const nuxt = await loadNuxt({ cwd: pagesFixtureDir, overrides, ready: true })
+    // @ts-expect-error should resolve to object?
+    expect(nuxt.options.pages).toMatchObject(result)
+    await nuxt.close()
+  })
+
+  it('generates layout types even when pages are disabled', async () => {
+    const nuxt = await loadNuxt({ cwd: pagesFixtureDir, overrides: { pages: false }, ready: true })
+    expect(nuxt.options.build.templates.some(t => t.filename === 'types/layouts.d.ts')).toBe(true)
+    await nuxt.close()
+  })
+})

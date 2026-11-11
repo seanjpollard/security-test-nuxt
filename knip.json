@@ -1,0 +1,237 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "rules": {
+    "duplicates": "off"
+  },
+  "ignoreExportsUsedInFile": true,
+  "tags": ["-knipignore"],
+  "ignore": ["**/.nuxt-*/**", "packages/*/dist/**"],
+  "ignoreIssues": {
+    "**/.nuxt/**": ["unlisted", "unresolved"]
+  },
+  "ignoreDependencies": [
+    "bing",
+    "somepath",
+    "foo",
+    "sherif",
+    "nonexistent-package",
+    "ofetch",
+    "verkit",
+    "@nuxt/webpack-builder",
+    "@nuxt/rsbuild-builder",
+    "@nuxt/rspack-builder",
+    "@rsbuild/core",
+    "@rspack/core"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*",
+        "bench/**/*.{ts,mjs}",
+        "bench/fixtures/**/*.vue",
+        "test/*.ts",
+        "test/bench/*.ts",
+        "test/e2e/*.ts",
+        "test/renderer/*.ts",
+        "test/no-jiti/*.mjs",
+        "test/runtime/app/**/*.ts",
+        "test/mocks/app-config.ts",
+        "test/mocks/app-manifest.ts",
+        "test/mocks/paths.ts"
+      ]
+    },
+    "test/fixtures/*": {
+      "entry": [
+        "**/*.{js,ts,tsx,mjs,mts,vue}!"
+      ],
+      "paths": {
+        "~~/*": ["./*"],
+        "~/*": ["./*"],
+        "#shared/*": ["./shared/*"]
+      }
+    },
+    "test/fixtures/nitro-legacy": {
+      "entry": [
+        "**/*.{js,ts,tsx,mjs,mts,vue}!"
+      ],
+      "paths": {
+        "~~/*": ["./*"],
+        "~/*": ["./*"],
+        "#shared/*": ["./shared/*"]
+      },
+      "ignoreUnresolved": ["#legacy-module-runtime"]
+    },
+    "test/fixtures/nitro-module-compat": {
+      "entry": [
+        "**/*.{js,ts,tsx,mjs,mts,vue}!"
+      ],
+      "paths": {
+        "~~/*": ["./*"],
+        "~/*": ["./*"],
+        "#shared/*": ["./shared/*"]
+      },
+      "ignoreUnresolved": ["#compat-virtual/nitro-dependent"]
+    },
+    "test/fixtures/basic": {
+      "entry": [
+        "**/*.{js,ts,tsx,mjs,mts,vue}!"
+      ],
+      "paths": {
+        "~~/*": ["./*"],
+        "~/*": ["./*"],
+        "#shared/*": ["./shared/*"]
+      },
+      "ignoreDependencies": [
+        "@babel/plugin-proposal-decorators",
+        "@babel/plugin-syntax-jsx",
+        "@rsbuild/plugin-pug",
+        "nested-dep"
+      ]
+    },
+    "test/fixtures/lazy-hydration": {
+      "entry": [
+        "**/*.{js,ts,tsx,mjs,mts,vue}!"
+      ],
+      "paths": {
+        "~~/*": ["./*"],
+        "~/*": ["./*"],
+        "#shared/*": ["./shared/*"]
+      },
+      "ignoreDependencies": ["@rsbuild/plugin-pug", "pug"]
+    },
+    "packages/nitro-server": {
+      "entry": [
+        "src/runtime/**/*.{js,ts,mjs}!"
+      ],
+      "ignoreDependencies": [
+        "mocked-exports",
+        "vue-devtools-stub",
+        "unenv",
+        "@babel/plugin-proposal-decorators",
+        "@babel/plugin-syntax-typescript"
+      ],
+      "ignoreUnresolved": ["#nitro/virtual/runtime-config"]
+    },
+    "packages/vite-server": {
+      "ignoreDependencies": [
+        "mocked-exports",
+        "rou3"
+      ]
+    },
+    "packages/vite": {
+      "entry": [
+        "test/utils.ts"
+      ],
+      "ignoreDependencies": [
+        "mocked-exports",
+        "nitropack",
+        "autoprefixer",
+        "cssnano",
+        "@babel/plugin-proposal-decorators",
+        "@babel/plugin-syntax-jsx"
+      ]
+    },
+    "packages/kit": {
+      "entry": [
+        "test/**/*.ts",
+        "test/**/*-fixture/**/*.{js,ts,mjs,cjs,cts,mts,vue}"
+      ],
+      "ignoreDependencies": [
+        "confbox"
+      ]
+    },
+    "packages/nuxt": {
+      "entry": [
+        "src/app/**/*.{ts,vue}!",
+        "src/*/runtime/**/*.{ts,js,vue}!",
+        "src/core/templates.ts!",
+        "meta.d.ts",
+        "test/**/*.ts",
+        "test/**/*-fixture/**/*.{js,ts,mjs,vue}"
+      ],
+      "ignoreUnresolved": ["../schema.ts"],
+      "ignoreDependencies": [
+        "@dxup/nuxt",
+        "@nuxt/devtools-onboard",
+        "@nuxt/nitro-server",
+        "@nuxt/telemetry",
+        "@nuxt/vite-builder",
+        "@nuxt/vite-server",
+        "pug"
+      ]
+    },
+    "packages/ui-templates": {
+      "entry": [
+        "lib/*.{ts,mjs}",
+        "templates/**/shader/start.ts!"
+      ],
+      "ignoreDependencies": [
+        "@vue/shared"
+      ]
+    },
+    "packages/webpack": {
+      "ignoreDependencies": [
+        "autoprefixer",
+        "css-loader",
+        "cssnano",
+        "file-loader",
+        "postcss-import",
+        "postcss-loader",
+        "postcss-url",
+        "pug-plain-loader",
+        "raw-loader",
+        "url-loader",
+        "vue"
+      ]
+    },
+    "packages/rsbuild": {
+      "ignoreDependencies": [
+        "@vue/compiler-sfc",
+        "escape-string-regexp",
+        "exsolve",
+        "knitwork",
+        "ohash",
+        "seroval",
+        "vue",
+        "vue-bundle-renderer"
+      ]
+    },
+    "packages/rspack": {
+      "ignoreDependencies": [
+        "@types/webpack-bundle-analyzer",
+        "@vue/compiler-sfc",
+        "autoprefixer",
+        "css-loader",
+        "css-minimizer-webpack-plugin",
+        "cssnano",
+        "defu",
+        "esbuild-loader",
+        "escape-string-regexp",
+        "file-loader",
+        "h3",
+        "h3-next",
+        "knitwork",
+        "memfs",
+        "mini-css-extract-plugin",
+        "ohash",
+        "postcss",
+        "postcss-import",
+        "postcss-import-resolver",
+        "postcss-loader",
+        "postcss-url",
+        "pug-plain-loader",
+        "raw-loader",
+        "rolldown-string",
+        "seroval",
+        "time-fix-plugin",
+        "tinyglobby",
+        "unenv",
+        "unplugin",
+        "url-loader",
+        "vue",
+        "vue-bundle-renderer",
+        "webpack-bundle-analyzer"
+      ]
+    }
+  }
+}

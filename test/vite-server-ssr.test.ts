@@ -1,0 +1,219 @@
+import { readFile } from 'node:fs/promises'
+import { glob } from 'tinyglobby'
+import { parse } from 'acorn'
+import { join } from 'pathe'
+import { beforeAll, describe, expect, it } from 'vitest'
+import { $fetch, fetch } from '@nuxt/test-utils/e2e'
+
+import { isDev, runsOnceInMatrix, runsOncePerEnvInMatrix } from './matrix'
+import { buildInProcess, fixturePath, parseData, setupFixture } from './utils'
+
+const rootDir = fixturePath('vite-server-ssr')
+
+const runsDev = runsOncePerEnvInMatrix && isDev
+
+await setupFixture('vite-server-ssr', runsDev)
+
+describe.skipIf(!runsDev)('pure vite dev server with ssr', () => {
+  it('renders the app on the server', async () => {
+    const html = await $fetch<string>('/')
+
+    expect(html).toContain('<h1>vite-server-ssr</h1>')
+    expect(html).toContain('<p id="greeting">hello from runtime config</p>')
+    expect(html).toContain('data-ssr="true"')
+    // transformed by vite, so the client that hydrates the render is the dev client
+    expect(html).toContain('/_nuxt/@vite/client')
+  })
+
+  it('renders the route that was requested', async () => {
+    const html = await $fetch<string>('/about')
+
+    expect(html).toContain('<p id="about"> about page </p>')
+    expect(html).toContain('<title>About</title>')
+  })
+
+  it('serves files from the public directory', async () => {
+    expect(await $fetch<string>('/static.txt')).toContain('static-asset')
+  })
+
+  it('fetches a path of the app in-process while rendering', async () => {
+    expect(await $fetch<string>('/fetched')).toContain('<p id="fetched">fetched the about page</p>')
+  })
+
+  it('renders the error page for a route no page matches', async () => {
+    const response = await fetch('/not-a-page', { headers: { accept: 'text/html' } })
+
+    expect(response.status).toBe(404)
+    expect(await response.text()).toContain('id="__nuxt"')
+  })
+
+  it('runs renderer plugins for every document it renders', async () => {
+    expect((await $fetch<string>('/')).match(/<meta name="renderer-plugin">/g)).toHaveLength(1)
+    expect(await $fetch<string>('/spa')).toContain('<meta name="renderer-plugin">')
+
+    const error = await fetch('/not-a-page', { headers: { accept: 'text/html' } })
+    expect(await error.text()).toContain('<meta name="renderer-plugin">')
+  })
+
+  it('renders the error page for a request that accepts JSON', async () => {
+    const response = await fetch('/not-a-page', { headers: { accept: 'application/json' } })
+
+    expect(response.status).toBe(404)
+    expect(response.headers.get('content-type')).toBe('text/html;charset=utf-8')
+  })
+})
+
+describe.skipIf(!runsOnceInMatrix)('pure vite server build', () => {
+  const buildDir = join(rootDir, 'node_modules/.cache/nuxt/.nuxt-build')
+  const outputDir = join(rootDir, 'node_modules/.cache/nuxt/.output-build')
+  let html: string
+  let render: (path: string) => Promise<Response>
+  const targets: Array<string | undefined> = []
+
+  beforeAll(async () => {
+    const nuxt = await buildInProcess(rootDir, { buildDir, nitro: { output: { dir: outputDir } } }, nuxt => targets.push(nuxt.serverBuild.target?.()))
+    targets.push(nuxt.serverBuild.target?.())
+    expect((nuxt as { _nitro?: unknown })._nitro).toBeUndefined()
+
+    // the entry only listens when it is the main module
+    const server = await import(join(outputDir, 'server/index.mjs')) as {
+      default: { fetch: (request: Request) => Promise<Response> }
+    }
+    render = path => server.default.fetch(new Request(new URL(path, 'http://localhost')))
+    html = await (await render('/')).text()
+  }, 240 * 1000)
+
+  it('reports `node` as the deploy target once the build has resolved its config', () => {
+    expect(targets).toEqual([undefined, 'node'])
+  })
+
+  it('renders the app', () => {
+    expect(html).toContain('<h1>vite-server-ssr</h1>')
+    expect(html).toContain('<title>Pure Vite SSR</title>')
+    expect(html).toContain('<meta name="description" content="rendered on the server">')
+  })
+
+  it('resolves data on the server and serialises it into the payload', () => {
+    expect(html).toContain('<p id="async-data">from useAsyncData</p>')
+    expect(parseData(html).script.data.greeting.rendered).toBe('from useAsyncData')
+    expect(html).toContain('data-ssr="true"')
+  })
+
+  it('inlines public runtime config', () => {
+    expect(html).toContain('<p id="greeting">hello from runtime config</p>')
+    expect(html).toContain('"hello from runtime config"')
+  })
+
+  it('links the client build the document hydrates with', () => {
+    expect(html).toMatch(/<script type="module" src="\/_nuxt\/[^"]+\.js"/)
+    expect(html).toContain('"#entry"')
+  })
+
+  it('renders each route it serves', async () => {
+    expect(await (await render('/about')).text()).toContain('<p id="about"> about page </p>')
+  })
+
+  it('fetches a path of the app in-process while rendering', async () => {
+    expect(await (await render('/fetched')).text()).toContain('<p id="fetched">fetched the about page</p>')
+  })
+
+  it('seeds an in-process fetch with the context of the request that made it', async () => {
+    expect(await (await render('/fetched-context')).text()).toContain('<p id="fetched-context">seeded with daniel and isolated</p>')
+  })
+
+  it('renders asset URLs without process-wide helpers', async () => {
+    expect(await (await render('/asset')).text()).toMatch(/<img id="asset" src="\/_nuxt\/logo\.[^"]+\.svg"/)
+
+    const files = await glob('**/*.mjs', { cwd: join(outputDir, 'server'), absolute: true })
+    const sources = await Promise.all(files.map(file => readFile(file, 'utf-8')))
+    expect(sources.filter(source => /__(?:build|public)AssetsURL/.test(source))).toEqual([])
+  })
+
+  it('serves the public directory in front of the renderer', async () => {
+    const response = await render('/static.txt')
+
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('static-asset')
+  })
+
+  it('renders the error page for a route no page matches', async () => {
+    const response = await render('/not-a-page')
+
+    expect(response.status).toBe(404)
+    expect(response.headers.get('content-type')).toBe('text/html;charset=utf-8')
+    expect(await response.text()).toContain('id="__nuxt"')
+  })
+
+  it('renders a route ruled `ssr: false` as an empty shell', async () => {
+    const shell = await (await render('/spa')).text()
+
+    expect(shell).not.toContain('id="spa"')
+    expect(shell).toContain('data-ssr="false"')
+  })
+
+  it('runs renderer plugins for every document it renders', async () => {
+    expect(html.match(/<meta name="renderer-plugin">/g)).toHaveLength(1)
+    expect(await (await render('/spa')).text()).toContain('<meta name="renderer-plugin">')
+    expect(await (await render('/not-a-page')).text()).toContain('<meta name="renderer-plugin">')
+  })
+
+  it('sends the response headers renderer plugins set', async () => {
+    expect((await render('/')).headers.get('x-renderer-plugin')).toBe('true')
+  })
+
+  it('renders a route ruled `noScripts` without scripts', async () => {
+    const rendered = await (await render('/no-scripts')).text()
+
+    expect(rendered).toContain('id="no-scripts"')
+    expect(rendered).not.toContain('<script type="module"')
+  })
+
+  it('answers a `redirect` rule without rendering', async () => {
+    for (const path of ['/old/page', '/old%2Fpage']) {
+      const response = await render(path)
+
+      expect(response.status, path).toBe(301)
+      expect(response.headers.get('location'), path).toBe('/about')
+      expect(await response.text(), path).toBe('<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0; url=/about"></head></html>')
+    }
+  })
+
+  it('carries the request query onto a redirect target that names its own', async () => {
+    const response = await render('/moved?ref=ad')
+
+    expect(response.status).toBe(307)
+    expect(response.headers.get('location')).toBe('/about?from=rule&ref=ad#top')
+    expect(await response.text()).toContain('content="0; url=/about?from=rule%26ref=ad#top"')
+  })
+
+  it('runs the middleware an `appMiddleware` rule names', async () => {
+    const response = await render('/guarded')
+
+    expect(response.status).toBe(302)
+    expect(response.headers.get('location')).toBe('/about')
+  })
+
+  it('renders with the layout an `appLayout` rule names', async () => {
+    expect(await (await render('/themed')).text()).toContain('id="themed"')
+  })
+
+  it('leaves no static document in front of the renderer', async () => {
+    await expect(readFile(join(outputDir, 'public/index.html'), 'utf-8')).rejects.toThrow()
+  })
+
+  it('bundles every dependency into the server output', async () => {
+    const files = await glob('**/*.mjs', { cwd: join(outputDir, 'server'), absolute: true })
+    const specifiers = new Set<string>()
+    for (const file of files) {
+      const program = parse(await readFile(file, 'utf-8'), { ecmaVersion: 'latest', sourceType: 'module' })
+      for (const node of program.body) {
+        if ((node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') && node.source) {
+          specifiers.add(node.source.value as string)
+        }
+      }
+    }
+
+    expect(specifiers.size).toBeGreaterThan(0)
+    expect([...specifiers].filter(specifier => !specifier.startsWith('node:') && !specifier.startsWith('.'))).toEqual([])
+  })
+})

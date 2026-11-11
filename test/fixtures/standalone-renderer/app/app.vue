@@ -1,0 +1,42 @@
+<script setup lang="ts">
+const config = useRuntimeConfig()
+
+const path = useNuxtApp().ssrContext!.url
+if (path.startsWith('/throws')) {
+  throw createError({ status: 503, statusText: 'Service Unavailable', message: 'the render threw', fatal: true })
+}
+if (path.startsWith('/rich-data')) {
+  throw createError({ status: 418, statusText: 'I am a teapot', message: 'rich data', data: { keep: 'yes', drop: () => {} }, fatal: true })
+}
+if (path.startsWith('/unhandled')) {
+  throw new Error('an unhandled failure')
+}
+if (path.startsWith('/prefetch-links')) {
+  useNuxtApp().hook('app:rendered', ({ ssrContext }) => {
+    ssrContext!.payload.prefetchLinks = [{ rel: 'preload', as: 'script', href: '/next-page.js' }]
+  })
+}
+if (path.startsWith('/rewritten')) {
+  useNuxtApp().hook('app:rendered', ({ renderResult }) => {
+    renderResult!.html = renderResult!.html.replace('rendered without nitro', 'rewritten after render')
+  })
+}
+
+useHead({
+  title: 'Standalone renderer',
+})
+
+const { data } = await useAsyncData('greeting', () => Promise.resolve('rendered without nitro'))
+
+const DeferredPanel = defineAsyncComponent(() => import('./components/DeferredPanel.vue'))
+</script>
+
+<template>
+  <div>
+    <h1>{{ data }}</h1>
+    <p id="greeting">
+      {{ config.public.greeting }}
+    </p>
+    <DeferredPanel v-if="path.startsWith('/deferred-panel')" />
+  </div>
+</template>

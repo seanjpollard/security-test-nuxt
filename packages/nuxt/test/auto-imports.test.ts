@@ -1,0 +1,299 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import { parseSync } from 'rolldown/utils'
+import * as VueFunctions from 'vue'
+import type { Import } from 'unimport'
+import { createUnimport } from 'unimport'
+import type { Plugin } from 'vite'
+import { registry as scriptRegistry } from '@nuxt/scripts/registry'
+import { RemovedImportsPlugin, TransformPlugin } from '../src/imports/transform.ts'
+import { defaultPresets, removedImports, scriptsStubsPreset } from '../src/imports/presets.ts'
+
+describe('imports:transform', () => {
+  const imports: Import[] = [
+    { name: 'ref', as: 'ref', from: 'vue' },
+    { name: 'computed', as: 'computed', from: 'bar' },
+    { name: 'foo', as: 'foo', from: 'excluded' },
+  ]
+
+  const ctx = createUnimport({
+    injectAtEnd: true,
+    parser: 'oxc',
+    imports,
+  })
+
+  const transformPlugin = TransformPlugin({ ctx, options: { transform: { exclude: [/node_modules/] } } }).raw({}, { framework: 'rollup', versions: {} }) as Plugin
+  const transform = async (source: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+    const result = await (transformPlugin.transform! as Function).call({ error: null, warn: null } as any, source, '')
+    return typeof result === 'string' ? result : result?.code
+  }
+
+  it('should correct inject', async () => {
+    expect(await transform('const a = ref(0)')).toMatchInlineSnapshot('"import { ref } from \'vue\';\nconst a = ref(0)"')
+  })
+
+  it('should ignore existing imported', async () => {
+    expect(await transform('import { ref } from "foo"; const a = ref(0)')).to.equal(undefined)
+    expect(await transform('import { computed as ref } from "foo"; const a = ref(0)')).to.equal(undefined)
+    expect(await transform('import ref from "foo"; const a = ref(0)')).to.equal(undefined)
+    expect(await transform('import { z as ref } from "foo"; const a = ref(0)')).to.equal(undefined)
+    expect(await transform('let ref = () => {}; const a = ref(0)')).to.equal(undefined)
+    expect(await transform('let { ref } = Vue; const a = ref(0)')).to.equal(undefined)
+    expect(await transform('let [\ncomputed,\nref\n] = Vue; const a = ref(0); const b = ref(0)')).to.equal(undefined)
+  })
+
+  it('should inject when a local variable of the same name is declared in a nested scope', async () => {
+    expect(await transform('const a = ref(0); function foo () { const ref = 1; return ref }')).toMatchInlineSnapshot('"import { ref } from \'vue\';\nconst a = ref(0); function foo () { const ref = 1; return ref }"')
+  })
+
+  it('should ignore comments', async () => {
+    const result = await transform('// import { computed } from "foo"\n;const a = computed(0)')
+    expect(result).toMatchInlineSnapshot(`
+      "import { computed } from 'bar';
+      // import { computed } from "foo"
+      ;const a = computed(0)"
+    `)
+  })
+
+  it('should exclude files from transform', async () => {
+    expect(await transform('excluded')).toEqual(undefined)
+  })
+
+  describe('$fetch', () => {
+    const plugin = (autoImport: boolean) => TransformPlugin({
+      ctx: createUnimport({ injectAtEnd: true, parser: 'oxc', virtualImports: ['#imports'], imports: [...imports, { name: '$fetch', from: '#build/fetch' }] }),
+      options: { autoImport },
+    }).raw({}, { framework: 'rollup', versions: {} }) as Plugin
+    const transformWith = async (autoImport: boolean, source: string, id: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+      const result = await (plugin(autoImport).transform! as Function).call({ error: null, warn: null } as any, source, id)
+      return typeof result === 'string' ? result : result?.code
+    }
+
+    it('should inject `$fetch` into module runtime code', async () => {
+      expect(await transformWith(true, 'const a = ref(0); export const load = () => $fetch(\'/messages.json\')', '/project/node_modules/some-module/dist/runtime/context.js'))
+        .toMatchInlineSnapshot(`
+          "import { $fetch } from '#build/fetch';
+          const a = ref(0); export const load = () => $fetch('/messages.json')"
+        `)
+    })
+
+    it('should inject `$fetch` alongside a module\'s `#imports`', async () => {
+      expect(await transformWith(true, 'import { ref } from \'#imports\'\nexport const load = () => $fetch(\'/messages.json\')', '/project/node_modules/some-module/dist/runtime/context.js'))
+        .toMatchInlineSnapshot(`
+          "import { $fetch } from '#build/fetch';
+          import { ref } from 'vue';
+
+          export const load = () => $fetch('/messages.json')"
+        `)
+    })
+
+    it('should inject `$fetch` when auto-imports are disabled', async () => {
+      expect(await transformWith(false, 'export const load = () => $fetch(\'/api\')', '/project/app/utils/load.ts'))
+        .toMatchInlineSnapshot(`
+          "import { $fetch } from '#build/fetch';
+          export const load = () => $fetch('/api')"
+        `)
+    })
+
+    it('should not inject `$fetch` where it is a property or a local binding', async () => {
+      expect(await transformWith(true, 'export const load = (app) => app.$fetch(\'/api\')', '/project/node_modules/some-module/dist/runtime/context.js')).toBeUndefined()
+      expect(await transformWith(true, 'const $fetch = globalThis.fetch; export const load = () => $fetch(\'/api\')', '/project/node_modules/some-module/dist/runtime/context.js')).toBeUndefined()
+    })
+  })
+
+  describe('removed imports', () => {
+    const transformWith = async (source: string, id: string, autoImport = true) => {
+      const reported: Array<[string, string[]]> = []
+      const plugin = RemovedImportsPlugin({
+        ctx: createUnimport({ parser: 'oxc', imports: [...imports, { name: 'useServerHeadSafe', from: '/project/app/composables/head.ts' }] }),
+        options: { autoImport },
+        imports: removedImports,
+        onRemovedImports: (id, imports) => reported.push([id, imports.map(i => i.name)]),
+      }).raw({}, { framework: 'rollup', versions: {} }) as {
+        transformInclude: (id: string) => boolean
+        transform: { filter: { code: { include: RegExp } }, handler: (code: string, id: string) => Promise<unknown> }
+      }
+      if (plugin.transformInclude(id) && plugin.transform.filter.code.include.test(source)) {
+        await plugin.transform.handler(source, id)
+      }
+      return reported
+    }
+
+    it('should report former auto-imports used without an import', async () => {
+      expect(await transformWith('useServerHead({}); useServerSeoMeta({}); const a = ref(0)', '/project/app/app.vue'))
+        .toEqual([['/project/app/app.vue', ['useServerHead', 'useServerSeoMeta']]])
+    })
+
+    it('should not report former auto-imports that are imported, declared or in a dependency', async () => {
+      expect(await transformWith('import { useServerHead } from \'#app\'\nuseServerHead({})', '/project/app/app.vue')).toEqual([])
+      expect(await transformWith('const useServerHead = () => {}; useServerHead()', '/project/app/app.vue')).toEqual([])
+      expect(await transformWith('useServerHeadSafe({})', '/project/app/app.vue')).toEqual([])
+      expect(await transformWith('useServerHead({})', '/project/node_modules/some-module/dist/runtime/plugin.js')).toEqual([])
+      expect(await transformWith('useServerHead({})', '/project/app/app.vue', false)).toEqual([])
+    })
+  })
+})
+
+const excludedNuxtHelpers = ['useHydration', 'useHead', 'useSeoMeta', 'useServerHead', 'useServerHeadSafe', 'useServerSeoMeta', 'useId']
+
+describe('imports:nuxt', () => {
+  it('should register every composable globally', () => {
+    const entrypointPath = fileURLToPath(new URL('../src/app/composables/index.ts', import.meta.url))
+    const { module } = parseSync(entrypointPath, readFileSync(entrypointPath, 'utf8'))
+    const names = module.staticExports.flatMap(statement => statement.entries.filter(entry => !entry.isType).map(entry => entry.exportName.name).filter((name): name is string => !!name))
+    const registered = new Set(defaultPresets.flatMap(a => a.from.startsWith('#app/') ? a.imports : []))
+
+    expect(names.length).toBeGreaterThan(0)
+    expect(names.filter(name => !excludedNuxtHelpers.includes(name) && !registered.has(name))).toEqual([])
+  })
+})
+
+const excludedVueHelpers = [
+  // Already globally registered
+  'defineEmits',
+  'defineExpose',
+  'defineModel',
+  'defineOptions',
+  'defineProps',
+  'defineSlots',
+  'withDefaults',
+  'stop',
+  //
+  '__esModule',
+  'devtools',
+  'EffectScope',
+  'ReactiveEffect',
+  'stop',
+  'assertNumber',
+  'camelize',
+  'capitalize',
+  'normalizeClass',
+  'normalizeProps',
+  'normalizeStyle',
+  'toDisplayString',
+  'toHandlerKey',
+  'BaseTransition',
+  'BaseTransitionPropsValidators',
+  'Comment',
+  'Fragment',
+  'KeepAlive',
+  'Static',
+  'Suspense',
+  'Teleport',
+  'Text',
+  'callWithAsyncErrorHandling',
+  'callWithErrorHandling',
+  'cloneVNode',
+  'compatUtils',
+  'createBlock',
+  'createCommentVNode',
+  'createElementBlock',
+  'createElementVNode',
+  'createHydrationRenderer',
+  'createPropsRestProxy',
+  'createRenderer',
+  'createSlots',
+  'createStaticVNode',
+  'createTextVNode',
+  'createVNode',
+  'getTransitionRawChildren',
+  'guardReactiveProps',
+  'handleError',
+  'initCustomFormatter',
+  'isMemoSame',
+  'isRuntimeOnly',
+  'isVNode',
+  'mergeDefaults',
+  'mergeModels',
+  'mergeProps',
+  'openBlock',
+  'popScopeId',
+  'pushScopeId',
+  'queuePostFlushCb',
+  'registerRuntimeCompiler',
+  'renderList',
+  'renderSlot',
+  'resolveComponent',
+  'resolveDirective',
+  'resolveDynamicComponent',
+  'resolveFilter',
+  'resolveTransitionHooks',
+  'setBlockTracking',
+  'setDevtoolsHook',
+  'setTransitionHooks',
+  'ssrContextKey',
+  'ssrUtils',
+  'toHandlers',
+  'transformVNodeArgs',
+  'useSSRContext',
+  'version',
+  'warn',
+  'watchPostEffect',
+  'watchSyncEffect',
+  'withAsyncContext',
+  'Transition',
+  'TransitionGroup',
+  'VueElement',
+  'ErrorTypeStrings',
+  'createApp',
+  'createSSRApp',
+  'defineCustomElement',
+  'defineSSRCustomElement',
+  'hydrate',
+  'initDirectivesForSSR',
+  'render',
+  'vModelCheckbox',
+  'vModelDynamic',
+  'vModelRadio',
+  'vModelSelect',
+  'vModelText',
+  'vShow',
+  'compile',
+  'DeprecationTypes',
+  'ErrorCodes',
+  'TrackOpTypes',
+  'TriggerOpTypes',
+  'useHost',
+  'hydrateOnVisible',
+  'hydrateOnMediaQuery',
+  'hydrateOnInteraction',
+  'hydrateOnIdle',
+  'onWatcherCleanup',
+  'getCurrentWatcher',
+  'patchProp',
+  'nodeOps',
+  'MoveType',
+  'NULL_DYNAMIC_COMPONENT',
+  'VueElementBase',
+  'defineVaporAsyncComponent',
+  'setIsHydratingEnabled',
+  'useInstanceOption',
+  'module.exports',
+]
+
+describe('imports:vue', () => {
+  it('should register every Vue helper globally', () => {
+    const registered = new Set(defaultPresets.find(a => a.from === 'vue')!.imports)
+    expect(Object.keys(VueFunctions).filter(name => !excludedVueHelpers.includes(name) && !registered.has(name))).toEqual([])
+  })
+})
+
+describe('imports:nuxt/scripts', async () => {
+  const scripts = await scriptRegistry().then(r => r.map(s => s.import?.name).filter(Boolean))
+  const globalScripts = new Set([
+    'useScript',
+    'useScriptEventPage',
+    'useScriptTriggerElement',
+    'useScriptTriggerConsent',
+    // registered separately
+    'useScriptGoogleTagManager',
+    'useScriptGoogleAnalytics',
+  ])
+  it('should stub exactly the composables in the @nuxt/scripts registry', () => {
+    expect(scriptsStubsPreset.imports.filter(name => !globalScripts.has(name as string) && !scripts.includes(name as string))).toEqual([])
+    expect(scripts.filter(name => !scriptsStubsPreset.imports.includes(name!))).toEqual([])
+  })
+})

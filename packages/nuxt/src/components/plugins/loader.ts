@@ -1,0 +1,206 @@
+import { createUnplugin } from 'unplugin'
+import { genDynamicImport, genImport } from 'knitwork'
+import { generateTransform, rolldownString } from 'rolldown-string'
+import { pascalCase } from 'scule'
+import { relative } from 'pathe'
+
+import { tryUseNuxt } from '@nuxt/kit'
+import { componentDiagnostics } from '@nuxt/kit/internal'
+import { QUOTE_RE, SX_RE, VUE_SCRIPT_TEMPLATE_ID_FILTER } from '../../core/utils/index.ts'
+import { createComponentsHotUpdate, installComponentModule, lazyHydrationFactory } from '../utils.ts'
+import type { HydrationStrategy } from '../utils.ts'
+import type { Component, ComponentsOptions } from 'nuxt/schema'
+
+interface LoaderOptions {
+  getComponents (): Component[]
+  mode: 'server' | 'client'
+  srcDir: string
+  serverComponentRuntime: string
+  clientDelayedComponentRuntime: string
+  transform?: ComponentsOptions['transform']
+  experimentalComponentIslands?: boolean
+  refreshComponents?: (file: string, timestamp: number) => void | Promise<void>
+}
+
+// Match both:
+// 1. _resolveComponent("ComponentName") - Vue's component resolution.
+//    `\d*` allows for deduplicated forms (e.g. `_resolveComponent2`) emitted by
+//    `@vue/compiler-sfc` when the same helper is imported more than once in a
+//    single SFC, which happens when a `<script setup lang="[jt]sx">` block
+//    references components from the template (nuxt/nuxt#30929).
+// 2. h(ComponentName, ...) - JSX h() calls with PascalCase component identifiers
+// 3. _createAssetComponent("ComponentName", ...) - Vapor's runtime component resolution.
+//    Only the helper name and its first (name) argument are matched, so the remaining
+//    arguments are preserved; the call is rewritten to `createComponentWithFallback(<import>, ...)`.
+const REPLACE_COMPONENT_TO_DIRECT_IMPORT_RE = /(?<=[\s(=;])_?resolveComponent\d*\s*\(\s*(?<quote>["'`])(?<lazy>lazy-|Lazy(?=[A-Z]))?(?<name>[^'"`]*)\k<quote>[^)]*\)|(?<=\bh\s*\(\s*)(?<hLazy>Lazy)?(?<hName>[A-Z][\w$]*)\b|(?<=[\s(=;,])_?createAssetComponent\d*\s*\(\s*(?<vaporQuote>["'`])(?<vaporLazy>lazy-|Lazy(?=[A-Z]))?(?<vaporName>[^'"`]*)\k<vaporQuote>/g
+
+const HYDRATION_STRATEGY_RE = /^(?<strategy>Idle|Visible|Interaction|MediaQuery|If|Never|Time)_(?<name>.+)$/
+const LEGACY_HYDRATION_STRATEGY_RE = /^(?<strategy>Idle|Visible|idle-|visible-|Interaction|interaction-|MediaQuery|media-query-|If|if-|Never|never-|Time|time-)(?<name>.+)$/
+
+export const LoaderPlugin = (options: LoaderOptions) => createUnplugin(() => {
+  const exclude = options.transform?.exclude || []
+  const include = options.transform?.include || []
+  const nuxt = tryUseNuxt()
+  /** Component names referenced by each transformed module, with the component each resolved to. */
+  const resolutions = new Map<string, Map<string, string | undefined>>()
+
+  return {
+    name: 'nuxt:components-loader',
+    enforce: 'post',
+    vite: {
+      hotUpdate: createComponentsHotUpdate(options.refreshComponents, resolutions, (_id, key) => resolveComponentKey(options.getComponents(), key, options.mode)),
+    },
+    transform: {
+      filter: {
+        id: {
+          include: [...include, ...VUE_SCRIPT_TEMPLATE_ID_FILTER, SX_RE],
+          exclude,
+        },
+      },
+      handler (code, id, meta?: unknown) {
+        const components = options.getComponents()
+
+        let num = 0
+        const imports = new Set<string>()
+        const map = new Map<Component, string>()
+        const resolved = new Map<string, string | undefined>()
+        const s = rolldownString(code, id, meta)
+        // replace `_resolveComponent("...")` to direct import
+        for (const match of code.matchAll(REPLACE_COMPONENT_TO_DIRECT_IMPORT_RE)) {
+          const groups = match.groups!
+          const lazy = !!(groups.hLazy || groups.lazy || groups.vaporLazy)
+          const name = (groups.hName || groups.name || groups.vaporName)!
+          const isVapor = groups.vaporQuote !== undefined
+          const { component, strategy } = resolveReference(components, lazy, name, options.mode)
+          resolved.set((lazy ? 'lazy' : '') + '|' + name, componentKey(components, component))
+
+          if (component) {
+            installComponentModule(component, id, nuxt)
+            let identifier = map.get(component) || `__nuxt_component_${num++}`
+            map.set(component, identifier)
+
+            const isServerOnly = !component._raw && component.mode === 'server' &&
+              !components.some(c => c.pascalName === component.pascalName && c.mode === 'client')
+            if (isServerOnly) {
+              imports.add(genImport(options.serverComponentRuntime, [{ name: 'createServerComponent' }]))
+              imports.add(`const ${identifier} = createServerComponent(${JSON.stringify(component.pascalName)})`)
+              if (!options.experimentalComponentIslands) {
+                componentDiagnostics.NUXT_B3003({ component: name! })
+              }
+              s.overwrite(match.index, match.index + match[0].length, isVapor ? vaporReplacement(imports, identifier) : identifier)
+              continue
+            }
+
+            const isClientOnly = !component._raw && component.mode === 'client'
+            if (isClientOnly) {
+              imports.add(genImport('#app/components/client-only', [{ name: 'createClientOnly' }]))
+              identifier += '_client'
+            }
+
+            if (lazy) {
+              const dynamicImport = `${genDynamicImport(component.filePath, { interopDefault: false })}.then(c => c.${component.export ?? 'default'} || c)`
+              if (strategy) {
+                const relativePath = relative(options.srcDir, component.filePath)
+                const factory = lazyHydrationFactory(strategy)
+                imports.add(genImport(options.clientDelayedComponentRuntime, [{ name: factory }]))
+                identifier += '_lazy_' + strategy.toLowerCase()
+                imports.add(`const ${identifier} = ${factory}(${JSON.stringify(relativePath)}, ${dynamicImport})`)
+              } else {
+                imports.add(genImport('vue', [{ name: 'defineAsyncComponent', as: '__defineAsyncComponent' }]))
+                identifier += '_lazy'
+                imports.add(`const ${identifier} = __defineAsyncComponent(${dynamicImport}${isClientOnly ? '.then(c => createClientOnly(c))' : ''})`)
+              }
+            } else {
+              imports.add(genImport(component.filePath, [{ name: component._raw ? 'default' : component.export, as: identifier }]))
+
+              if (isClientOnly) {
+                imports.add(`const ${identifier}_wrapped = createClientOnly(${identifier})`)
+                identifier += '_wrapped'
+              }
+            }
+
+            s.overwrite(match.index, match.index + match[0].length, isVapor ? vaporReplacement(imports, identifier) : identifier)
+          }
+        }
+
+        if (imports.size) {
+          s.prepend([...imports, ''].join('\n'))
+        }
+
+        if (options.refreshComponents) {
+          if (resolved.size) {
+            resolutions.set(id, resolved)
+          } else {
+            resolutions.delete(id)
+          }
+        }
+
+        return generateTransform(s, id)
+      },
+    },
+  }
+})
+
+// TODO: `createAssetComponent`'s sixth argument is `maybeSelfReference` while
+// `createComponentWithFallback`'s is `appContext`. The compiler only emits it for
+// `__self`-suffixed self-references, which shouldn't reach the auto-import path,
+// but a self-referencing vapor component could misbehave here.
+function vaporReplacement (imports: Set<string>, identifier: string) {
+  imports.add(genImport('vue', [{ name: 'createComponentWithFallback', as: '__nuxt_createComponentWithFallback' }]))
+  return `__nuxt_createComponentWithFallback(${identifier}`
+}
+
+function componentKey (components: Component[], component: Component | null | undefined) {
+  if (!component) { return }
+  const hasClientVariant = components.some(c => c.pascalName === component.pascalName && c.mode === 'client')
+  return `${component.filePath}#${component.export ?? 'default'}#${component.mode}#${!!component._raw}#${hasClientVariant}`
+}
+
+function resolveComponentKey (components: Component[], key: string, mode: LoaderOptions['mode']) {
+  const separator = key.indexOf('|')
+  const { component } = resolveReference(components, separator > 0, key.slice(separator + 1), mode)
+  return componentKey(components, component)
+}
+
+function resolveReference (components: Component[], lazy: boolean, name: string, mode: LoaderOptions['mode']): { component?: Component | null, strategy?: HydrationStrategy } {
+  if (!lazy) {
+    return { component: findComponent(components, name, mode) }
+  }
+
+  const hydrated = name.match(HYDRATION_STRATEGY_RE)?.groups
+  if (hydrated) {
+    return { component: findComponent(components, hydrated.name!, mode), strategy: hydrated.strategy as HydrationStrategy }
+  }
+
+  const component = findComponent(components, name, mode)
+  if (component) {
+    return { component }
+  }
+
+  const legacy = name.match(LEGACY_HYDRATION_STRATEGY_RE)?.groups
+  const legacyComponent = legacy && findComponent(components, legacy.name!, mode)
+  if (legacyComponent) {
+    return { component: legacyComponent, strategy: pascalCase(legacy.strategy!) as HydrationStrategy }
+  }
+
+  return {}
+}
+
+function findComponent (components: Component[], name: string, mode: LoaderOptions['mode']) {
+  const id = pascalCase(name).replace(QUOTE_RE, '')
+  // Prefer exact match
+  const validModes = new Set(['all', mode, undefined])
+  const component = components.find(component => id === component.pascalName && validModes.has(component.mode))
+  if (component) { return component }
+
+  const otherModeComponent = components.find(component => id === component.pascalName)
+
+  // Render client-only components on the server with <ServerPlaceholder>
+  if (mode === 'server' && otherModeComponent) {
+    return components.find(c => c.pascalName === 'ServerPlaceholder')
+  }
+
+  // Return the other-mode component in all other cases - we'll handle createClientOnly
+  // and createServerComponent above
+  return otherModeComponent
+}

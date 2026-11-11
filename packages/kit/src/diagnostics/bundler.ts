@@ -1,0 +1,190 @@
+import { defineDiagnostics } from 'nostics'
+import { docsBase, reporters } from './_shared.ts'
+
+/**
+ * B7xxx
+ * Bundler (Vite / webpack / Nitro) diagnostics.
+ *
+ * @internal
+ */
+export const bundlerDiagnostics = /* #__PURE__ */ defineDiagnostics({
+  docsBase,
+  reporters,
+  codes: {
+    NUXT_B7001: {
+      why: '`rollup-plugin-visualizer` is not installed, so bundle analysis cannot run.',
+      fix: (p: { installCommand: string }) => `Run \`${p.installCommand}\` to enable bundle analysis.`,
+      docs: false,
+    },
+    NUXT_B7002: {
+      why: (p: { deps: string }) => `Some \`vite.optimizeDeps.include\` entries could not be resolved: ${p.deps}.`,
+      fix: 'Remove or correct these entries in the `vite.optimizeDeps.include` array of your `nuxt.config.ts`. Report entries added by a Nuxt module to the module author.',
+      docs: false,
+    },
+    NUXT_B7003: {
+      why: 'The server-side bundle produced more than one JS entry file.',
+      fix: 'Avoid using `optimization.splitChunks` in the server config.',
+      docs: false,
+    },
+    NUXT_B7004: {
+      why: (p: { entryName: string }) => `Webpack entry \`${p.entryName}\` was not found.`,
+      fix: (p: { entryName: string }) => `Check that the \`entry\` option in your webpack configuration points to an existing file. Expected entry name: \`${p.entryName}\`.`,
+      docs: false,
+    },
+    NUXT_B7005: {
+      why: (p: { input: string }) => `No client entry was found in \`rollupOptions.input\`; expected an \`entry\` key or a string input but received ${p.input}.`,
+      fix: 'Set `vite.build.rollupOptions.input` to a string or an object with an `entry` key in your `nuxt.config`.',
+      docs: false,
+    },
+    NUXT_B7006: {
+      why: (p: { input: string }) => `No server entry was found in \`rollupOptions.input\`; expected a \`server\` key or a string input but received ${p.input}.`,
+      fix: 'Set `vite.build.rollupOptions.input` to a string or an object with a `server` key in your `nuxt.config`.',
+      docs: false,
+    },
+    NUXT_B7007: {
+      why: (p: { pluginName: string }) => `The PostCSS plugin \`${p.pluginName}\` could not be loaded.`,
+      fix: (p: { installCommand: string }) => `Run \`${p.installCommand}\` to install the PostCSS plugin.`,
+      docs: false,
+    },
+    NUXT_B7008: {
+      why: '`@vitejs/plugin-vue-jsx` is not installed, so JSX support is unavailable.',
+      fix: (p: { installCommand: string }) => `Run \`${p.installCommand}\` to install it.`,
+      docs: false,
+    },
+    NUXT_B7009: {
+      why: (p: { deps: string }) => `The Babel dependencies required for decorator support are missing: ${p.deps}.`,
+      fix: (p: { installCommand: string }) => `Run \`${p.installCommand}\` to install the required Babel decorator dependencies.`,
+      docs: false,
+    },
+    NUXT_B7011: {
+      why: (p: { pluginName: string }) => `The PostCSS plugin \`${p.pluginName}\` could not be imported, which is unexpected.`,
+      fix: (p: { installCommand: string }) => `Run \`${p.installCommand}\` to install it, or report this issue at https://github.com/nuxt/nuxt/issues.`,
+      docs: false,
+    },
+    NUXT_B7012: {
+      why: (p: { requiredSize: number, maxSize: number }) => `A ViteNode socket payload of ${p.requiredSize} bytes exceeds the internal buffer limit of ${p.maxSize} bytes.`,
+      fix: 'Reduce the payload size sent through the ViteNode socket.',
+      docs: false,
+    },
+    NUXT_B7013: {
+      why: 'The ViteNode socket server was started without a configured socket path.',
+      fix: 'This is likely an internal Nuxt bug. Please report it at https://github.com/nuxt/nuxt/issues.',
+      docs: false,
+    },
+    NUXT_B7014: {
+      why: (p: { name: string }) => `The webpack \`${p.name}\` build failed with errors.`,
+      fix: 'Fix the build errors listed above. If the errors are unclear, try running `nuxt cleanup` and rebuilding.',
+      docs: false,
+    },
+    NUXT_B7015: {
+      why: 'Payload extraction is disabled, which is suboptimal for full-static output.',
+      fix: 'Set `experimental.payloadExtraction` to `true` or `\'client\'`.',
+      docs: false,
+    },
+    NUXT_B7016: {
+      why: (p: { path: string }) => `The configured \`spaLoadingTemplate\` path does not exist: \`${p.path}\`.`,
+      fix: 'Point `spaLoadingTemplate` in `nuxt.config` at an existing HTML file, or set it to `true` to use the default template.',
+      docs: false,
+    },
+    NUXT_B7017: {
+      why: 'Could not find the Nuxt dev server to attach Rspack HMR to; hot module replacement will be disabled.',
+      fix: 'This is likely an internal Nuxt bug. Please report it with a reproduction.',
+      docs: false,
+    },
+    NUXT_B7018: {
+      why: 'Failed to restrict vite-node socket permissions; closing the socket.',
+      fix: 'Check that the temporary directory used for the vite-node socket is writable and supports `chmod`.',
+      docs: false,
+    },
+    NUXT_B7019: {
+      why: 'The server webpack build does not externalize dependencies.',
+      fix: 'Externalize dependencies in the server build (`externals`) for better build performance.',
+      docs: false,
+    },
+    NUXT_B7020: {
+      why: 'The client build manifest is disabled, but Nuxt requires it to render the correct assets for each route.',
+      fix: 'Remove any `build.manifest: false` override from your `nuxt.config` `vite` options or from a Vite plugin `config`/`configEnvironment` hook.',
+      docs: false,
+    },
+    NUXT_B7021: {
+      why: (p: { manifestFile: string }) => `The client build manifest was expected at \`${p.manifestFile}\` but was not emitted by the client build.`,
+      fix: 'Check that no Vite plugin removes or renames the client build manifest in a `generateBundle`/`writeBundle` hook. If this happens with no such plugin, please report it at https://github.com/nuxt/nuxt/issues.',
+      docs: false,
+    },
+    NUXT_B7022: {
+      why: (p: { existing: string, route: string }) => `Route rules for \`${p.existing}\` and \`${p.route}\` resolve to the same path; \`${p.route}\` takes precedence.`,
+      fix: (p: { canFold: boolean }) => `Disambiguate the keys${p.canFold ? ' or set `router.options.sensitive: true`' : ''}.`,
+      docs: false,
+    },
+    NUXT_B7023: {
+      why: (p: { dir: string, baseURL: string }) => `A configured \`nitro.publicAssets\` directory does not exist: \`${p.dir}\`. Requests to \`${p.baseURL}\` will return a 404.`,
+      fix: (p: { resolvedFrom: string }) => `Relative \`dir\` values are resolved against ${p.resolvedFrom}. Point \`dir\` at an existing directory, using an absolute path or a Nuxt alias (such as \`~~/public/video\`) if it lives elsewhere.`,
+      docs: false,
+    },
+    NUXT_B7024: {
+      why: (p: { outDir: string, publicDir: string }) => `The client build output directory is set to \`${p.outDir}\`, but the server builder writes the client build to \`${p.publicDir}\`, so the override is ignored.`,
+      fix: 'Remove the `vite.$client.build.outDir` override from your `nuxt.config`, and set `nitro.output.publicDir` to move the whole public output instead.',
+      docs: false,
+    },
+    NUXT_B7025: {
+      why: (p: { input: string }) => `The client build input is set to \`${p.input}\`, which cannot carry the document the server builder emits, so the override is ignored.`,
+      fix: 'Pass an object to `vite.$client.build.rolldownOptions.input` if you need additional inputs, or add an `index.html` at the root of your app directory to take over the document itself.',
+      docs: false,
+    },
+    NUXT_B7026: {
+      why: (p: { route: string }) => `The route rule for \`${p.route}\` sets \`redirect.statusCode\`, which the server builder no longer reads.`,
+      fix: 'Rename it to `redirect.status`. Nuxt has applied it as `status` for now.',
+      docs: false,
+    },
+    NUXT_B7027: {
+      why: (p: { pluginName: string, packageName: string }) => `The PostCSS plugin \`${p.pluginName}\` could not be loaded: \`${p.packageName}\` is installed but does not provide it.`,
+      fix: (p: { pluginName: string, packageName: string }) => `Remove \`${p.pluginName}\` from \`postcss.plugins\` in your \`nuxt.config\` (or report it to the author of the module that adds it), or install a version of \`${p.packageName}\` that provides it.`,
+      docs: false,
+    },
+    NUXT_B7029: {
+      why: '`@nuxt/rspack-builder` is deprecated and will be removed in a future major version of Nuxt.',
+      fix: 'Install `@nuxt/rsbuild-builder` and set `builder: \'rsbuild\'` in your `nuxt.config`. See https://nuxt.com/docs/5.x/getting-started/upgrade#rspack-builder-is-replaced-by-the-rsbuild-builder for the options and hooks that change.',
+      docs: false,
+    },
+    NUXT_B7030: {
+      why: '`@rsbuild/plugin-type-check` is not installed, so type checking cannot run.',
+      fix: (p: { installCommand: string }) => `Run \`${p.installCommand}\` to enable type checking.`,
+      docs: false,
+    },
+    NUXT_B7031: {
+      why: '`@rsdoctor/rspack-plugin` is not installed, so bundle analysis cannot run.',
+      fix: (p: { installCommand: string }) => `Run \`${p.installCommand}\` to enable bundle analysis.`,
+      docs: false,
+    },
+    NUXT_B7032: {
+      why: (p: { environments: string }) => `Rsbuild failed to build the ${p.environments}.`,
+      fix: 'Fix the build errors listed above. If the errors are unclear, try running `nuxt cleanup` and rebuilding.',
+      docs: false,
+    },
+    NUXT_B7033: {
+      why: (p: { file: string, lang: string, packageName: string, installCommand: string }) => `\`${p.file}\` uses \`${p.lang}\`, but \`${p.packageName}\` is not installed, so it cannot be compiled.`,
+      fix: (p: { file: string, lang: string, packageName: string, installCommand: string }) => `Run \`${p.installCommand}\`.`,
+      docs: false,
+    },
+    NUXT_B7034: {
+      why: (p: { file: string, packageName: string }) => `\`${p.packageName}\` was installed during the build, so \`${p.file}\` could not be compiled.`,
+      fix: 'Run the build again.',
+      docs: false,
+    },
+    NUXT_B7035: {
+      why: (p: { packageName: string, exportName: string, cause?: unknown }) => `\`${p.packageName}\` is installed, but its \`${p.exportName}\` export could not be loaded.`,
+      fix: (p: { packageName: string, exportName: string, cause?: unknown }) => `Reinstall \`${p.packageName}\` with a version compatible with \`@rsbuild/core\`.`,
+      docs: false,
+    },
+    NUXT_B7036: {
+      why: (p: { method: string, url: string, error: string, headersSent: boolean }) => `Handling \`${p.method} ${p.url}\` threw, so the dev server ${p.headersSent ? 'cut the response off' : 'responded with a 500'}: ${p.error}`,
+      fix: 'Fix the error in the stack trace. If it does not point at your app or a module, please report it at https://github.com/nuxt/nuxt/issues.',
+      docs: false,
+    },
+    NUXT_B7037: {
+      why: 'The deploy target running the `ssr` environment failed or did not handle a request, so Nuxt responded with a 500.',
+      fix: 'In development, Nuxt can only render through `#server-entry` inside the target. Fix the error the target logged, or have it pass the request to `#server-entry`.',
+      docs: false,
+    },
+  },
+})

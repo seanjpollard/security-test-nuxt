@@ -1,0 +1,440 @@
+import { describe, expect, it } from 'vitest'
+import { kebabCase, pascalCase } from 'scule'
+import { rolldown } from 'rolldown'
+import vuePlugin from '@vitejs/plugin-vue'
+import vuePluginJsx from '@vitejs/plugin-vue-jsx'
+import type { AddComponentOptions } from '@nuxt/kit'
+import { LoaderPlugin } from '../src/components/plugins/loader.ts'
+import { LazyHydrationTransformPlugin } from '../src/components/plugins/lazy-hydration-transform.ts'
+
+describe('components:loader', () => {
+  it('should correctly resolve components', async () => {
+    const sfc = `
+    <template>
+      <MyComponent />
+      <LazyMyComponent />
+      <RouterLink />
+      <NamedComponent />
+    </template>
+
+    <script setup>
+    const NamedComponent = resolveComponent('MyComponent')
+    </script>
+    `
+    const code = await transform(sfc, '/pages/index.vue')
+    expect(normalizeCode(code)).toMatchInlineSnapshot(`
+      "import __nuxt_component_0 from "/components/MyComponent.vue";
+      import { Fragment, createElementBlock, createVNode, defineAsyncComponent, openBlock, resolveComponent, unref } from "vue";
+      // /pages/index.vue
+      const __nuxt_component_0_lazy = defineAsyncComponent(() => import("/components/MyComponent.vue").then((c) => c.default || c));
+      const _sfc_main = {
+        __name: "index",
+        setup(__props) {
+          const NamedComponent = __nuxt_component_0;
+          return (_ctx, _cache) => {
+            const _component_MyComponent = __nuxt_component_0;
+            const _component_LazyMyComponent = __nuxt_component_0_lazy;
+            const _component_RouterLink = resolveComponent("RouterLink");
+            return openBlock(), createElementBlock(Fragment, null, [
+              createVNode(_component_MyComponent),
+              createVNode(_component_LazyMyComponent),
+              createVNode(_component_RouterLink),
+              createVNode(unref(NamedComponent))
+            ], 64);
+          };
+        }
+      };
+      export { _sfc_main as default };"
+    `)
+  })
+
+  it('should correctly resolve components with minifyWhitespace (esbuild) #32290', async () => {
+    const content = `import { createHotContext as __vite__createHotContext } from "/_nuxt/@vite/client";import.meta.hot = __vite__createHotContext("/app.vue");import { recordPosition as _tracerRecordPosition } from "vite-plugin-vue-tracer/dist/client/record.mjs"
+import{defineComponent as _defineComponent}from"vue";const _sfc_main=_defineComponent({__name:"app",setup(__props,{expose:__expose}){__expose();console.log("111");const __returned__={};Object.defineProperty(__returned__,"__isScriptSetup",{enumerable:false,value:true});return __returned__}});import{resolveComponent as _resolveComponent,createVNode as _createVNode,openBlock as _openBlock,createElementBlock as _createElementBlock}from"/_nuxt/node_modules/.pnpm/vue@3.5.16_typescript@5.8.3/node_modules/vue/dist/vue.runtime.esm-bundler.js?v=cbc061e8";function _sfc_render(_ctx,_cache,$props,$setup,$data,$options){const _component_NuxtRouteAnnouncer=_resolveComponent("MyComponent");const _component_NuxtWelcome=_resolveComponent("MyComponent");return _openBlock(),_tracer(2,2,_createElementBlock("div",null,[_tracer(3,4,_createVNode(_component_NuxtRouteAnnouncer)),_tracer(4,4,_createVNode(_component_NuxtWelcome))]))}_sfc_main.__hmrId="938b83b0";typeof __VUE_HMR_RUNTIME__!=="undefined"&&__VUE_HMR_RUNTIME__.createRecord(_sfc_main.__hmrId,_sfc_main);import.meta.hot.on("file-changed",({file})=>{__VUE_HMR_RUNTIME__.CHANGED_FILE=file});import.meta.hot.accept(mod=>{if(!mod)return;const{default:updated,_rerender_only}=mod;if(_rerender_only){__VUE_HMR_RUNTIME__.rerender(updated.__hmrId,updated.render)}else{__VUE_HMR_RUNTIME__.reload(updated.__hmrId,updated)}});import _export_sfc from"/_nuxt/@id/__x00__plugin-vue:export-helper";export default _export_sfc(_sfc_main,[["render",_sfc_render],["__file","/project/workspace/app.vue"]]);
+
+function _tracer(line, column, vnode) { return _tracerRecordPosition("app.vue", line, column, vnode) }
+`
+    const code = await ((plugin.raw({}, { framework: 'vite', versions: {} }) as { transform: { handler: (code: string, id: string) => { code: string, map?: unknown } | null } }).transform.handler(
+      content,
+      '/app.vue',
+    ))
+    expect(code?.map).toBeDefined()
+    delete code?.map
+    expect(code).toMatchInlineSnapshot(`
+      {
+        "code": "import { default as __nuxt_component_0 } from "/components/MyComponent.vue";
+      import { createHotContext as __vite__createHotContext } from "/_nuxt/@vite/client";import.meta.hot = __vite__createHotContext("/app.vue");import { recordPosition as _tracerRecordPosition } from "vite-plugin-vue-tracer/dist/client/record.mjs"
+      import{defineComponent as _defineComponent}from"vue";const _sfc_main=_defineComponent({__name:"app",setup(__props,{expose:__expose}){__expose();console.log("111");const __returned__={};Object.defineProperty(__returned__,"__isScriptSetup",{enumerable:false,value:true});return __returned__}});import{resolveComponent as _resolveComponent,createVNode as _createVNode,openBlock as _openBlock,createElementBlock as _createElementBlock}from"/_nuxt/node_modules/.pnpm/vue@3.5.16_typescript@5.8.3/node_modules/vue/dist/vue.runtime.esm-bundler.js?v=cbc061e8";function _sfc_render(_ctx,_cache,$props,$setup,$data,$options){const _component_NuxtRouteAnnouncer=__nuxt_component_0;const _component_NuxtWelcome=__nuxt_component_0;return _openBlock(),_tracer(2,2,_createElementBlock("div",null,[_tracer(3,4,_createVNode(_component_NuxtRouteAnnouncer)),_tracer(4,4,_createVNode(_component_NuxtWelcome))]))}_sfc_main.__hmrId="938b83b0";typeof __VUE_HMR_RUNTIME__!=="undefined"&&__VUE_HMR_RUNTIME__.createRecord(_sfc_main.__hmrId,_sfc_main);import.meta.hot.on("file-changed",({file})=>{__VUE_HMR_RUNTIME__.CHANGED_FILE=file});import.meta.hot.accept(mod=>{if(!mod)return;const{default:updated,_rerender_only}=mod;if(_rerender_only){__VUE_HMR_RUNTIME__.rerender(updated.__hmrId,updated.render)}else{__VUE_HMR_RUNTIME__.reload(updated.__hmrId,updated)}});import _export_sfc from"/_nuxt/@id/__x00__plugin-vue:export-helper";export default _export_sfc(_sfc_main,[["render",_sfc_render],["__file","/project/workspace/app.vue"]]);
+
+      function _tracer(line, column, vnode) { return _tracerRecordPosition("app.vue", line, column, vnode) }
+      ",
+      }
+    `)
+
+    expect(code?.code).toContain('__nuxt_component_0')
+  })
+
+  it('should work in jsx', async () => {
+    const component = `
+    import { defineComponent } from 'vue'
+    export default defineComponent({
+      setup () {
+        const NamedComponent = resolveComponent('MyComponent')
+        return () => <div>
+          <MyComponent />
+          <LazyMyComponent />
+          <RouterLink />
+          <NamedComponent />
+        </div>
+      }
+    })
+    `
+    const code = await transform(component, '/pages/about.tsx')
+    expect(normalizeCode(code)).toMatchInlineSnapshot(`
+      "import __nuxt_component_0 from "/components/MyComponent.vue";
+      import { createVNode, defineAsyncComponent, defineComponent, resolveComponent } from "vue";
+      // /pages/about.tsx
+      const __nuxt_component_0_lazy = defineAsyncComponent(() => import("/components/MyComponent.vue").then((c) => c.default || c));
+      var about_default = /* @__PURE__ */ defineComponent({ setup() {
+        const NamedComponent = __nuxt_component_0;
+        return () => createVNode("div", null, [
+          createVNode(__nuxt_component_0, null, null),
+          createVNode(__nuxt_component_0_lazy, null, null),
+          createVNode(resolveComponent("RouterLink"), null, null),
+          createVNode(NamedComponent, null, null)
+        ]);
+      } });
+      export { about_default as default };"
+    `)
+  })
+
+  it('should auto-import deduplicated _resolveComponent calls (#30929)', async () => {
+    // Mimics what `@vue/compiler-sfc` emits for an SFC whose `<script setup lang="jsx">`
+    // block calls `resolveComponent` (via JSX) and whose `<template>` also calls
+    // `resolveComponent`: the second import is suffixed (`_resolveComponent2`) and
+    // the JSX-site is rewritten to `_createVNode(_resolveComponent2("MyComponent"), …)`.
+    const content = `import { resolveComponent as _resolveComponent, createVNode as _createVNode, resolveComponent as _resolveComponent2, createVNode as _createVNode2 } from "vue";
+export default {
+  __name: 'app',
+  setup(__props) {
+    const Jsx = _createVNode2(_resolveComponent2("MyComponent"), null, null);
+    return (_ctx, _cache) => {
+      const _component_OtherComponent = _resolveComponent("OtherComponent");
+      return _createVNode(_component_OtherComponent);
+    };
+  }
+};
+`
+    const code = await ((plugin.raw({}, { framework: 'vite', versions: {} }) as { transform: { handler: (code: string, id: string) => { code: string } | null } }).transform.handler(
+      content,
+      '/app.vue?vue&type=script&setup=true&lang.jsx',
+    ))
+    expect(code?.code).toContain('import { default as __nuxt_component_0 } from "/components/MyComponent.vue"')
+    expect(code?.code).toContain('_createVNode2(__nuxt_component_0, null, null)')
+  })
+
+  it('should auto-import known PascalCase components referenced by h() calls', async () => {
+    const component = `
+    import { h, defineComponent } from 'vue'
+    export default defineComponent({
+      setup() {
+        return () => h('div', [
+          h(MyComponent),
+          h(MyComponent, { prop: true }),
+          h(MyComponent, null, ['children']),
+          h(OtherComponent, { id: 2 }),
+          h(myComponent),
+        ])
+      }
+    })
+    `
+    const code = await transform(component, '/pages/jsx-h.tsx')
+    expect(code).toContain('import __nuxt_component_0 from')
+    expect(code).toContain('/components/MyComponent.vue')
+    expect(code.match(/h\(__nuxt_component_0/g)).toHaveLength(3)
+    expect(code).toContain('h(OtherComponent,')
+    expect(code).toContain('h(myComponent')
+  })
+
+  it('should handle JSX with lazy components in JSX syntax', async () => {
+    const component = `
+    import { defineComponent } from 'vue'
+    export default defineComponent({
+      setup() {
+        return () => <div>
+          <LazyMyComponent foo="bar" />
+        </div>
+      }
+    })
+    `
+    const code = await transform(component, '/pages/lazy-jsx.tsx')
+    expect(code).toContain('defineAsyncComponent')
+    expect(code).toContain('__nuxt_component_0_lazy')
+    expect(code).toContain('createVNode(__nuxt_component_0_lazy,')
+  })
+
+  it('should correctly resolve lazy hydration components', async () => {
+    const sfc = `
+    <template>
+      <LazyMyComponent :hydrate-on-idle="3000" />
+      <LazyMyComponent :hydrate-on-visible="{threshold: 0.2}" />
+      <LazyMyComponent :hydrate-on-interaction="['click','mouseover']" />
+      <LazyMyComponent hydrate-on-media-query="(max-width: 500px)" />
+      <LazyMyComponent :hydrate-after="3000" />
+      <LazyMyComponent :hydrateAfter="3000" />
+      <LazyMyComponent :hydrate-on-idle>
+        <LazyMyComponent hydrate-when="true" />
+      </LazyMyComponent>
+      <LazyMyComponent hydrate-on-visible />
+      <LazyMyComponent hydrate-never />
+    </template>
+    `
+    const lines = await transform(sfc, '/pages/index.vue').then(r => r.split('\n'))
+    const imports = lines.filter(l => l.startsWith('import'))
+    expect(imports.join('\n')).toMatchInlineSnapshot(`
+      "import { createLazyIdleComponent, createLazyIfComponent, createLazyInteractionComponent, createLazyMediaQueryComponent, createLazyNeverComponent, createLazyTimeComponent, createLazyVisibleComponent } from "/client-runtime.mjs";
+      import { Fragment, createElementBlock, createVNode, openBlock, withCtx } from "vue";"
+    `)
+    const components = lines.filter(l => l.startsWith('const __nuxt_component'))
+    expect(components.join('\n')).toMatchInlineSnapshot(`
+      "const __nuxt_component_0_lazy_idle = createLazyIdleComponent("components/MyComponent.vue", () => import("/components/MyComponent.vue").then((c) => c.default || c));
+      const __nuxt_component_0_lazy_visible = createLazyVisibleComponent("components/MyComponent.vue", () => import("/components/MyComponent.vue").then((c) => c.default || c));
+      const __nuxt_component_0_lazy_interaction = createLazyInteractionComponent("components/MyComponent.vue", () => import("/components/MyComponent.vue").then((c) => c.default || c));
+      const __nuxt_component_0_lazy_mediaquery = createLazyMediaQueryComponent("components/MyComponent.vue", () => import("/components/MyComponent.vue").then((c) => c.default || c));
+      const __nuxt_component_0_lazy_time = createLazyTimeComponent("components/MyComponent.vue", () => import("/components/MyComponent.vue").then((c) => c.default || c));
+      const __nuxt_component_0_lazy_if = createLazyIfComponent("components/MyComponent.vue", () => import("/components/MyComponent.vue").then((c) => c.default || c));
+      const __nuxt_component_0_lazy_never = createLazyNeverComponent("components/MyComponent.vue", () => import("/components/MyComponent.vue").then((c) => c.default || c));"
+    `)
+  })
+
+  it('should respect local bindings when a component named like a script tag precedes the script block', async () => {
+    const sfc = `
+    <template>
+      <ScriptGoogleMaps />
+      <LazyMyComponent hydrate-on-idle />
+    </template>
+
+    <script setup>
+    const LazyMyComponent = defineAsyncComponent(() => import('./Local.vue'))
+    </script>
+    `
+    const code = await transform(sfc, '/pages/index.vue')
+    expect(code).toContain('createVNode(unref(LazyMyComponent), { "hydrate-on-idle": "" })')
+  })
+
+  it('should auto-import components resolved via vapor createAssetComponent', async () => {
+    const content = `import { createAssetComponent as _createAssetComponent, template as _template } from "vue";
+const t0 = _template("<div></div>", 1);
+function _sfc_render(_ctx) {
+  const n3 = t0();
+  const n2 = _createAssetComponent("MyComponent", { label: "nested" });
+  const n4 = _createAssetComponent("UnknownComponent");
+  return n3;
+}
+`
+    const code = await ((plugin.raw({}, { framework: 'vite', versions: {} }) as { transform: { handler: (code: string, id: string) => { code: string } | null } }).transform.handler(
+      content,
+      '/pages/index.vue',
+    ))
+    expect(code?.code).toContain('import { default as __nuxt_component_0 } from "/components/MyComponent.vue"')
+    expect(code?.code).toContain('import { createComponentWithFallback as __nuxt_createComponentWithFallback } from "vue"')
+    expect(code?.code).toContain('__nuxt_createComponentWithFallback(__nuxt_component_0, { label: "nested" })')
+    expect(code?.code).toContain('_createAssetComponent("UnknownComponent")')
+  })
+
+  it('should only treat hydration strategies after a lazy prefix as modifiers', async () => {
+    const content = `import { h } from 'vue'
+const a = _resolveComponent("TimeLine")
+const b = _resolveComponent("time-line")
+const c = h(TimeLine)
+const d = _createAssetComponent("TimeLine")
+const e = _resolveComponent("LazyTimeLine")
+const f = _resolveComponent("LazyTime_Line")
+const g = _resolveComponent("LazyIdleLine")
+`
+    const code = await ((plugin.raw({}, { framework: 'vite', versions: {} }) as { transform: { handler: (code: string, id: string) => { code: string } | null } }).transform.handler(
+      content,
+      '/pages/index.vue',
+    ))
+    expect(code?.code).toMatchInlineSnapshot(`
+      "import { default as __nuxt_component_0 } from "/components/TimeLine.vue";
+      import { createComponentWithFallback as __nuxt_createComponentWithFallback } from "vue";
+      import { defineAsyncComponent as __defineAsyncComponent } from "vue";
+      const __nuxt_component_0_lazy = __defineAsyncComponent(() => import("/components/TimeLine.vue").then(c => c.default || c))
+      import { createLazyTimeComponent } from "/client-runtime.mjs";
+      const __nuxt_component_1_lazy_time = createLazyTimeComponent("components/Line.vue", () => import("/components/Line.vue").then(c => c.default || c))
+      import { createLazyIdleComponent } from "/client-runtime.mjs";
+      const __nuxt_component_1_lazy_idle = createLazyIdleComponent("components/Line.vue", () => import("/components/Line.vue").then(c => c.default || c))
+      import { h } from 'vue'
+      const a = __nuxt_component_0
+      const b = __nuxt_component_0
+      const c = h(__nuxt_component_0)
+      const d = __nuxt_createComponentWithFallback(__nuxt_component_0)
+      const e = __nuxt_component_0_lazy
+      const f = __nuxt_component_1_lazy_time
+      const g = __nuxt_component_1_lazy_idle
+      "
+    `)
+  })
+
+  it('should distinguish lazy components prefixed with a hydration strategy from lazy hydrated components', async () => {
+    const sfc = `
+    <template>
+      <LazyTimeLine />
+      <LazyLine :hydrate-after="100" />
+    </template>
+    `
+    const lines = await transform(sfc, '/pages/index.vue').then(r => r.split('\n'))
+    const components = lines.filter(l => l.startsWith('const __nuxt_component'))
+    expect(components.join('\n')).toMatchInlineSnapshot(`
+      "const __nuxt_component_0_lazy = defineAsyncComponent(() => import("/components/TimeLine.vue").then((c) => c.default || c));
+      const __nuxt_component_1_lazy_time = createLazyTimeComponent("components/Line.vue", () => import("/components/Line.vue").then((c) => c.default || c));"
+    `)
+  })
+
+  it.each([
+    ['hydrate-on-idle', 'createLazyIdleComponent'],
+    ['hydrate-on-visible', 'createLazyVisibleComponent'],
+    ['hydrate-on-interaction', 'createLazyInteractionComponent'],
+    ['hydrate-on-media-query', 'createLazyMediaQueryComponent'],
+    ['hydrate-after', 'createLazyTimeComponent'],
+    ['hydrate-when', 'createLazyIfComponent'],
+    ['hydrate-never', 'createLazyNeverComponent'],
+    ['hydrateOnIdle', 'createLazyIdleComponent'],
+    ['hydrateOnVisible', 'createLazyVisibleComponent'],
+    ['hydrateOnInteraction', 'createLazyInteractionComponent'],
+    ['hydrateOnMediaQuery', 'createLazyMediaQueryComponent'],
+    ['hydrateAfter', 'createLazyTimeComponent'],
+    ['hydrateWhen', 'createLazyIfComponent'],
+    ['hydrateNever', 'createLazyNeverComponent'],
+  ])('should correctly resolve lazy hydration components %s', async (prop, component) => {
+    const sfc = `
+    <template>
+      <LazyMyComponent ${prop} />
+    </template>
+    `
+    const result = await transform(sfc, '/pages/index.vue').then(r => r.split('\n'))
+    expect(result.join('\n')).toContain(component)
+  })
+
+  describe('hot updates', () => {
+    function setup () {
+      const registry = [...components]
+      const refreshed: string[] = []
+      const raw = LoaderPlugin({
+        clientDelayedComponentRuntime: '/client-runtime.mjs',
+        serverComponentRuntime: '/server-runtime.mjs',
+        getComponents: () => registry,
+        srcDir: '/',
+        mode: 'client',
+        refreshComponents: (file) => {
+          if (file.startsWith('/components/')) {
+            refreshed.push(file)
+            return Promise.resolve()
+          }
+        },
+      }).raw({}, { framework: 'vite', versions: {} }) as any
+      const graph = new Map<string, { id: string }>()
+      const transform = (id: string, code: string) => {
+        graph.set(id, { id })
+        return raw.transform.handler(code, id)
+      }
+      const hotUpdate = (type: string, file: string, modules: unknown[] = []) =>
+        raw.vite.hotUpdate.handler.call({ environment: { moduleGraph: { getModuleById: (id: string) => graph.get(id) } } }, { type, file, modules })
+      return { registry, refreshed, transform, hotUpdate, graph }
+    }
+
+    it('should update modules whose component resolution changed', async () => {
+      const { registry, refreshed, transform, hotUpdate, graph } = setup()
+      transform('/pages/uses.vue', 'const a = _resolveComponent("MyComponent")')
+      transform('/pages/unrelated.vue', 'const a = _resolveComponent("OtherComponent")')
+      transform('/pages/none.vue', 'const a = 1')
+
+      registry[0] = { ...registry[0]!, filePath: '/components/Renamed.vue' }
+      const own = { id: '/components/MyComponent.vue' }
+      const result = await hotUpdate('delete', '/components/MyComponent.vue', [own])
+
+      expect(refreshed).toEqual(['/components/MyComponent.vue'])
+      expect(result).toEqual([own, graph.get('/pages/uses.vue')])
+    })
+
+    it('should update modules referencing a newly added component', async () => {
+      const { registry, transform, hotUpdate, graph } = setup()
+      transform('/pages/unresolved.vue', 'const a = _resolveComponent("NewComponent")')
+      transform('/pages/uses.vue', 'const a = _resolveComponent("MyComponent")')
+
+      registry.push({ ...registry[0]!, pascalName: 'NewComponent', kebabName: 'new-component', filePath: '/components/NewComponent.vue' })
+
+      expect(await hotUpdate('create', '/components/NewComponent.vue')).toEqual([graph.get('/pages/unresolved.vue')])
+    })
+
+    it('should ignore updates and non-component files', async () => {
+      const { refreshed, transform, hotUpdate } = setup()
+      transform('/pages/uses.vue', 'const a = _resolveComponent("MyComponent")')
+
+      expect(await hotUpdate('update', '/components/MyComponent.vue')).toBeUndefined()
+      expect(await hotUpdate('create', '/utils/foo.ts')).toBeUndefined()
+      expect(await hotUpdate('create', '/components/Unused.vue')).toBeUndefined()
+      expect(refreshed).toEqual(['/components/Unused.vue'])
+    })
+  })
+})
+const components = ([
+  { name: 'MyComponent', filePath: '/components/MyComponent.vue' },
+  { name: 'Line', filePath: '/components/Line.vue' },
+  { name: 'TimeLine', filePath: '/components/TimeLine.vue' },
+] as AddComponentOptions[]).map(opts => ({
+  export: opts.export || 'default',
+  chunkName: 'components/' + kebabCase(opts.name),
+  global: opts.global ?? false,
+  kebabName: kebabCase(opts.name || ''),
+  pascalName: pascalCase(opts.name || ''),
+  prefetch: false,
+  preload: false,
+  mode: 'all' as const,
+  shortPath: opts.filePath,
+  priority: 0,
+  meta: {},
+  ...opts,
+}))
+
+const plugin = LoaderPlugin({
+  clientDelayedComponentRuntime: '/client-runtime.mjs',
+  serverComponentRuntime: '/server-runtime.mjs',
+  getComponents: () => components,
+  srcDir: '/',
+  mode: 'server',
+})
+
+/** Normalize rolldown output to be stable across different working directories */
+function normalizeCode (code: string) {
+  return code.replace(/\t/g, '  ').replace(/\/\/#region (?:\.\.\/)+/g, '//#region /').replace(/\/\/ (?:\.\.\/)+/g, '// /')
+}
+
+async function transform (code: string, filename: string) {
+  const bundle = await rolldown({
+    input: filename,
+    external: id => id !== filename,
+    plugins: [
+      {
+        name: 'entry',
+        resolveId (id) {
+          if (id === filename) {
+            return id
+          }
+        },
+        load (id) {
+          if (id === filename) {
+            return code
+          }
+        },
+      },
+      LazyHydrationTransformPlugin({ getComponents: () => components }).rolldown(),
+      vuePlugin(),
+      vuePluginJsx(),
+      plugin.rolldown(),
+    ],
+  })
+  const { output: [chunk] } = await bundle.generate({})
+  return chunk.code.trim()
+}

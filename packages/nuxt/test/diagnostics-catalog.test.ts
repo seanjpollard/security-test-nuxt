@@ -1,0 +1,94 @@
+import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
+import { glob } from 'tinyglobby'
+import { describe, expect, it } from 'vitest'
+
+// Build-time (NUXT_B) catalogs.
+import { buildDiagnostics, bundlerDiagnostics, componentDiagnostics, configDiagnostics, headDiagnostics, pageDiagnostics, pluginDiagnostics } from '@nuxt/kit/internal'
+// The B8xxx kit-api catalog is intentionally kit-internal, so reach for it directly.
+import { kitDiagnostics } from '../../kit/src/diagnostics/kit-api.ts'
+
+// Runtime (NUXT_E) catalogs.
+import { appDiagnostics } from '../src/app/diagnostics/core.ts'
+import { navigationDiagnostics } from '../src/app/diagnostics/navigation.ts'
+import { dataDiagnostics } from '../src/app/diagnostics/data.ts'
+import { renderDiagnostics } from '../src/app/diagnostics/render.ts'
+import { manifestDiagnostics } from '../src/app/diagnostics/manifest.ts'
+import { unheadDiagnostics } from '../src/app/diagnostics/head.ts'
+import { stateDiagnostics } from '../src/app/diagnostics/state.ts'
+import { serverDiagnostics } from '../../nitro-server/src/runtime/diagnostics.ts'
+import { nitroBuildDiagnostics } from '../../nitro-server/src/diagnostics.ts'
+import { rendererDiagnostics } from '../src/runtime/server/renderer/diagnostics.ts'
+import { prerenderDiagnostics, runtimeConfigDiagnostics } from '../src/runtime/server/runtime-config/diagnostics.ts'
+
+// Schema continues kit's B5xxx configuration range, so it has to be swept too.
+import { schemaDiagnostics } from '../../schema/src/diagnostics.ts'
+
+const catalogs = {
+  buildDiagnostics,
+  pluginDiagnostics,
+  componentDiagnostics,
+  pageDiagnostics,
+  configDiagnostics,
+  headDiagnostics,
+  bundlerDiagnostics,
+  kitDiagnostics,
+  appDiagnostics,
+  navigationDiagnostics,
+  dataDiagnostics,
+  renderDiagnostics,
+  manifestDiagnostics,
+  unheadDiagnostics,
+  stateDiagnostics,
+  serverDiagnostics,
+  nitroBuildDiagnostics,
+  rendererDiagnostics,
+  runtimeConfigDiagnostics,
+  prerenderDiagnostics,
+  schemaDiagnostics,
+}
+
+const packagesDir = fileURLToPath(new URL('../..', import.meta.url))
+
+describe('diagnostics catalog', () => {
+  it('has no duplicate codes across every catalog', () => {
+    // Codes live in separate defineDiagnostics() calls, so nothing but this
+    // global sweep can catch two diagnostics sharing a code.
+    const owners = new Map<string, string[]>()
+    for (const [name, catalog] of Object.entries(catalogs)) {
+      for (const code of Object.keys(catalog)) {
+        owners.set(code, [...owners.get(code) || [], name])
+      }
+    }
+
+    const duplicates = [...owners]
+      .filter(([_code, names]) => names.length > 1)
+      .map(([code, names]) => `${code} is defined in ${names.join(' and ')}`)
+
+    expect(duplicates).toStrictEqual([])
+  })
+
+  it.each(Object.entries(catalogs))('%s lists its codes in ascending order', (_name, catalog) => {
+    // Gaps are fine; a code filed out of order is how two catalogs end up
+    // claiming the same number without anyone noticing in review.
+    const codes = Object.keys(catalog)
+    expect(codes).toStrictEqual([...codes].sort((a, b) => a.localeCompare(b, 'en', { numeric: true })))
+  })
+
+  it('sweeps every catalog defined in the repo', async () => {
+    const files = await glob('*/src/**/*.ts', { cwd: packagesDir, absolute: true, ignore: ['**/node_modules/**'] })
+
+    const defined = new Set<string>()
+    for (const file of files) {
+      const contents = readFileSync(file, 'utf-8')
+      if (!contents.includes('defineDiagnostics(')) {
+        continue
+      }
+      for (const match of contents.matchAll(/export const (\w+) =[\s\S]{0,120}?defineDiagnostics\(/g)) {
+        defined.add(match[1]!)
+      }
+    }
+
+    expect([...defined].filter(name => !(name in catalogs)).sort()).toStrictEqual([])
+  })
+})

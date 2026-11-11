@@ -1,0 +1,270 @@
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { basename, dirname, resolve } from 'pathe'
+import { resolveModulePath } from 'exsolve'
+// @ts-expect-error missing types
+import TimeFixPlugin from 'time-fix-plugin'
+import type { Configuration } from 'webpack'
+import { directoryToURL, logger } from '@nuxt/kit'
+import { DEFAULT_JS_FILE_EXTENSIONS, parseNodeModulePath } from '@nuxt/kit/internal'
+import { joinURL } from 'ufo'
+import type { NuxtOptions } from '@nuxt/schema'
+import { defu } from 'defu'
+import type { WarningFilter } from '../plugins/warning-ignore.ts'
+import WarningIgnorePlugin from '../plugins/warning-ignore.ts'
+import { FriendlyErrorsPlugin } from '../plugins/friendly-errors.ts'
+import type { WebpackConfigContext } from '../utils/config.ts'
+import { applyPresets, fileName } from '../utils/config.ts'
+import { getNuxtDefines, getTranspilePatterns, resolveVueAliases } from '../utils/options.ts'
+import { RollupCompatDynamicImportPlugin } from '../plugins/rollup-compat-dynamic-import.ts'
+import { StripInvalidPureAnnotationsPlugin } from '../plugins/strip-invalid-pure-annotations.ts'
+
+import { WebpackBarPlugin, builder, webpack } from '../builder.ts'
+
+export async function base (ctx: WebpackConfigContext) {
+  await applyPresets(ctx, [
+    baseAlias,
+    baseConfig,
+    basePlugins,
+    baseResolve,
+    baseTranspile,
+  ])
+}
+
+function baseConfig (ctx: WebpackConfigContext) {
+  const rules: NonNullable<Configuration['module']>['rules'] = []
+  if (builder === 'rspack') {
+    rules.push({
+      test: /\.m?js$/,
+      resolve: {
+        fullySpecified: false,
+      },
+    })
+  }
+
+  ctx.config = defu({}, {
+    name: ctx.name,
+    entry: { app: [resolve(ctx.options.appDir, (ctx.options.experimental.asyncEntry || ctx.isDev) ? 'entry.async' : 'entry')] },
+    module: {
+      rules,
+      // Nuxt resolves some virtual module exports lazily (e.g. `?inline` CSS), so missing exports
+      // must not fail the build under Rspack.
+      ...builder === 'rspack'
+        ? { parser: { javascript: { exportsPresence: 'auto' as const } } }
+        : {},
+    },
+    plugins: [],
+    externals: [],
+    optimization: {
+      ...ctx.userConfig.optimization,
+      minimizer: [],
+    },
+    experiments: {
+      ...ctx.userConfig.experiments,
+    },
+    mode: ctx.isDev ? 'development' : 'production',
+    cache: ctx.isDev ? undefined : false,
+    output: getOutput(ctx),
+    stats: statsMap[ctx.nuxt.options.logLevel] ?? statsMap.info,
+    ...ctx.config,
+  } satisfies Configuration)
+}
+
+function basePlugins (ctx: WebpackConfigContext) {
+  ctx.config.plugins ||= []
+
+  if (ctx.isDev && builder !== 'rspack') {
+    ctx.config.plugins.push(new TimeFixPlugin())
+  }
+
+  ctx.config.plugins.push(...(ctx.userConfig.plugins || []))
+
+  if (builder !== 'rspack') {
+    ctx.config.plugins.push(new WarningIgnorePlugin(getWarningIgnoreFilter(ctx)))
+  }
+
+  ctx.config.plugins.push(new webpack.DefinePlugin(getEnv(ctx)))
+
+  if (ctx.isDev && (ctx.isServer || ctx.userConfig.friendlyErrors)) {
+    ctx.config.plugins.push(new FriendlyErrorsPlugin())
+  }
+
+  if (ctx.nuxt.options.webpack.profile) {
+    // Webpackbar
+    const colors = {
+      client: 'green',
+      server: 'orange',
+      modern: 'blue',
+    }
+    ctx.config.plugins.push(new WebpackBarPlugin({
+      name: ctx.name,
+      color: colors[ctx.name as keyof typeof colors],
+      reporters: ['stats'],
+      // @ts-expect-error TODO: this is a valid option for Webpack.ProgressPlugin and needs to be declared for WebpackBar
+      stats: !ctx.isDev,
+      reporter: {
+        reporter: {
+          change: (_, { shortPath }) => {
+            if (!ctx.isServer) {
+              ctx.nuxt.callHook(`${builder}:change`, shortPath)
+            }
+          },
+          done: (_, { stats }) => {
+            if (stats.hasErrors()) {
+              ctx.nuxt.callHook(`${builder}:error`)
+            } else {
+              logger.success(`Finished building ${stats.compilation.name ?? 'Nuxt app'}`)
+            }
+          },
+          allDone: () => {
+            ctx.nuxt.callHook(`${builder}:done`)
+          },
+          progress: ({ webpackbar }) => {
+            ctx.nuxt.callHook(`${builder}:progress`, webpackbar.statesArray)
+          },
+        },
+      },
+    }))
+  }
+
+  // Emit explicit dynamic import statements for rollup compatibility
+  if (ctx.isServer && !ctx.isDev) {
+    ctx.config.plugins.push(new RollupCompatDynamicImportPlugin())
+    ctx.config.plugins.push(new StripInvalidPureAnnotationsPlugin())
+  }
+}
+
+function baseAlias (ctx: WebpackConfigContext) {
+  ctx.alias = {
+    '#app': ctx.options.appDir,
+    [basename(ctx.nuxt.options.dir.assets)]: resolve(ctx.nuxt.options.srcDir, ctx.nuxt.options.dir.assets),
+    ...resolveVueAliases(ctx.nuxt, ctx.isServer),
+    ...ctx.options.alias,
+    ...ctx.alias,
+  }
+  if (ctx.isClient) {
+    ctx.alias['nitro/runtime-config'] = resolve(ctx.nuxt.options.buildDir, 'nitro.client.mjs')
+    // TODO: remove in v5
+    ctx.alias['#internal/nitro'] = resolve(ctx.nuxt.options.buildDir, 'nitro.client.mjs')
+    ctx.alias['nitropack/runtime'] = resolve(ctx.nuxt.options.buildDir, 'nitro.client.mjs')
+  }
+}
+
+/**
+ * The `node_modules` directories that hold a package's dependencies, given a file
+ * resolved inside it. Covers both the isolated pnpm layout (dependencies are symlinked
+ * into the package's `.pnpm` group) and the hoisted/workspace layout (dependencies live
+ * in the package's own `node_modules`).
+ */
+export function packageDependencyDirs (entry: string | undefined) {
+  if (!entry) { return [] }
+
+  const dirs = new Set<string>()
+  const groupDir = parseNodeModulePath(entry).dir
+  if (groupDir) { dirs.add(resolve(groupDir)) }
+
+  let dir = dirname(entry)
+  while (dir !== dirname(dir)) {
+    if (existsSync(resolve(dir, 'package.json'))) {
+      dirs.add(resolve(dir, 'node_modules'))
+      break
+    }
+    dir = dirname(dir)
+  }
+
+  return [...dirs].filter(dir => existsSync(dir))
+}
+
+// This module is bundled into whichever builder package is installed
+// (`@nuxt/webpack-builder` or `@nuxt/rspack-builder`), so its dependency directories are
+// where that builder's loaders (vue-loader, css-loader, ...) live. Searching them lets
+// isolated node_modules layouts (pnpm without shamefully-hoist) find the loaders and
+// client runtime helpers Nuxt ships with. (#31351)
+const builderModulesDirs = packageDependencyDirs(fileURLToPath(import.meta.url))
+
+function baseResolve (ctx: WebpackConfigContext) {
+  // Prioritize nested node_modules in webpack search path (#2558)
+  // TODO: this might be refactored as default modulesDir?
+  const webpackModulesDir = ['node_modules', ...ctx.options.modulesDir]
+
+  // Nuxt's generated virtual modules import runtime dependencies of `nuxt` and
+  // `@nuxt/nitro-server` (e.g. `ofetch`, `ufo`, `nitro`) by bare specifier. Under isolated
+  // node_modules layouts these are not reachable from the app root, so fall back to those
+  // packages' dependency directories. (#31351)
+  const from = ctx.options.modulesDir.map(directoryToURL)
+  const runtimeModulesDirs = ['nuxt/package.json', '@nuxt/nitro-server/package.json']
+    .flatMap(id => packageDependencyDirs(resolveModulePath(id, { from, try: true })))
+
+  const resolveModules = [...webpackModulesDir]
+  for (const dir of [...runtimeModulesDirs, ...builderModulesDirs]) {
+    if (!resolveModules.includes(dir)) {
+      resolveModules.push(dir)
+    }
+  }
+
+  const resolveLoaderModules = [...webpackModulesDir]
+  for (const dir of builderModulesDirs) {
+    if (!resolveLoaderModules.includes(dir)) {
+      resolveLoaderModules.push(dir)
+    }
+  }
+
+  ctx.config.resolve = {
+    extensions: ['.wasm', ...DEFAULT_JS_FILE_EXTENSIONS, '.json', '.vue'],
+    modules: resolveModules,
+    fullySpecified: false,
+    ...ctx.config.resolve,
+    alias: { ...ctx.alias, ...ctx.config.resolve?.alias },
+  }
+
+  ctx.config.resolveLoader = {
+    modules: resolveLoaderModules,
+    ...ctx.config.resolveLoader,
+  }
+}
+
+function baseTranspile (ctx: WebpackConfigContext) {
+  // `.vue.js` includes SFCs in node_modules
+  ctx.transpile = [/\.vue\.js/i, ...getTranspilePatterns(ctx.nuxt, ctx), ...ctx.transpile]
+}
+
+function getOutput (ctx: WebpackConfigContext): Configuration['output'] {
+  return {
+    path: resolve(ctx.options.buildDir, 'dist', ctx.isServer ? 'server' : joinURL('client', ctx.options.app.buildAssetsDir)),
+    filename: fileName(ctx, 'app'),
+    chunkFilename: fileName(ctx, 'chunk'),
+    publicPath: joinURL(ctx.options.app.baseURL, ctx.options.app.buildAssetsDir),
+  }
+}
+
+function getWarningIgnoreFilter (ctx: WebpackConfigContext): WarningFilter {
+  const filters: WarningFilter[] = [
+    // Hide warnings about plugins without a default export (#1179)
+    warn => warn.name === 'ModuleDependencyWarning' &&
+      warn.message.includes('export \'default\'') &&
+      warn.message.includes('nuxt_plugin_'),
+    ...(ctx.userConfig.warningIgnoreFilters || []),
+  ]
+
+  return warn => !filters.some(ignoreFilter => ignoreFilter(warn))
+}
+
+function getEnv (ctx: WebpackConfigContext) {
+  const _env: Record<string, string | boolean | InstanceType<typeof webpack.DefinePlugin>['definitions'][string]> = {
+    'process.env.NODE_ENV': JSON.stringify(ctx.config.mode),
+    ...getNuxtDefines(ctx.nuxt, ctx.isServer ? 'server' : 'client'),
+  }
+
+  if (ctx.userConfig.aggressiveCodeRemoval) {
+    _env['typeof process'] = JSON.stringify(ctx.isServer ? 'object' : 'undefined')
+    _env['typeof window'] = _env['typeof document'] = JSON.stringify(!ctx.isServer ? 'object' : 'undefined')
+  }
+
+  return _env
+}
+
+const statsMap: Record<NuxtOptions['logLevel'], Configuration['stats']> = {
+  silent: 'none',
+  info: 'normal',
+  verbose: 'verbose',
+}

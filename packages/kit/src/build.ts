@@ -1,0 +1,333 @@
+import type { Nuxt, NuxtBuildOutputs, RsbuildConfig, RsbuildPlugin, ViteConfig, VitePlugin, WebpackConfig, WebpackPluginInstance } from '@nuxt/schema'
+import { useNuxt } from './context.ts'
+import { toArray } from './utils.ts'
+import { resolveAlias } from './resolve.ts'
+import { getUserCaller, warn } from './internal/trace.ts'
+
+type Arrayable<T> = T | T[]
+type Thenable<T> = T | Promise<T>
+type RspackCompatiblePluginInstance = {
+  apply: (...args: any[]) => void
+  [k: string]: any
+}
+type PluginOrGetter<T> = Arrayable<T> | (() => Thenable<Arrayable<T>>)
+
+async function resolvePlugins<T> (pluginOrGetter: PluginOrGetter<T>): Promise<T[]> {
+  return toArray(typeof pluginOrGetter === 'function' ? await (pluginOrGetter as () => Thenable<Arrayable<T>>)() : pluginOrGetter)
+}
+
+const insertMethod = (options?: { prepend?: boolean }) => options?.prepend ? 'unshift' as const : 'push' as const
+
+export interface ExtendConfigOptions {
+  /**
+   * Install plugin on dev
+   * @default true
+   */
+  dev?: boolean
+  /**
+   * Install plugin on build
+   * @default true
+   */
+  build?: boolean
+  /**
+   * Install plugin on server side
+   * @default true
+   */
+  server?: boolean
+  /**
+   * Install plugin on client side
+   * @default true
+   */
+  client?: boolean
+  /**
+   * Prepends the plugin to the array with `unshift()` instead of `push()`.
+   */
+  prepend?: boolean
+}
+
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface ExtendWebpackConfigOptions extends ExtendConfigOptions {}
+
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface ExtendRsbuildConfigOptions extends Omit<ExtendConfigOptions, 'server' | 'client' | 'prepend'> {}
+
+export interface ExtendViteConfigOptions extends Omit<ExtendConfigOptions, 'server' | 'client'> {
+  /**
+   * Extend server Vite configuration
+   * @default true
+   * @deprecated calling \`extendViteConfig\` with only server/client environment is deprecated.
+   * Nuxt 5+ uses the Vite Environment API which shares a configuration between environments.
+   * You can likely use a Vite plugin to achieve the same result.
+   */
+  server?: boolean
+  /**
+   * Extend client Vite configuration
+   * @default true
+   * @deprecated calling \`extendViteConfig\` with only server/client environment is deprecated.
+   * Nuxt 5+ uses the Vite Environment API which shares a configuration between environments.
+   * You can likely use a Vite plugin to achieve the same result.
+   */
+  client?: boolean
+}
+
+const extendWebpackCompatibleConfig = (builder: 'rspack' | 'webpack') => (fn: ((config: WebpackConfig) => Thenable<void>), options: ExtendWebpackConfigOptions = {}) => {
+  const nuxt = useNuxt()
+
+  if (options.dev === false && nuxt.options.dev) {
+    return
+  }
+  if (options.build === false && !nuxt.options.dev) {
+    return
+  }
+
+  nuxt.hook(`${builder}:config`, async (configs) => {
+    if (options.server !== false) {
+      // the server environment of the Rsbuild builder is named `ssr`
+      const config = configs.find(i => i.name === 'server' || (builder === 'rspack' && i.name === 'ssr'))
+      if (config) {
+        await fn(config)
+      }
+    }
+    if (options.client !== false) {
+      const config = configs.find(i => i.name === 'client')
+      if (config) {
+        await fn(config)
+      }
+    }
+  })
+}
+
+type ExtendWebpacklikeConfig = (fn: (config: WebpackConfig) => void, options?: ExtendWebpackConfigOptions) => void
+
+/**
+ * Extend webpack config
+ *
+ * The fallback function might be called multiple times
+ * when applying to both client and server builds.
+ */
+export const extendWebpackConfig: ExtendWebpacklikeConfig = extendWebpackCompatibleConfig('webpack')
+/**
+ * Extend rspack config
+ *
+ * The fallback function might be called multiple times
+ * when applying to both client and server builds.
+ */
+export const extendRspackConfig: ExtendWebpacklikeConfig = extendWebpackCompatibleConfig('rspack')
+
+/**
+ * Extend Rsbuild config
+ *
+ * The configuration contains a `client` and an `ssr` environment, which can be
+ * configured individually with `config.environments`.
+ */
+export function extendRsbuildConfig (fn: ((config: RsbuildConfig) => Thenable<void>), options: ExtendRsbuildConfigOptions = {}): void {
+  const nuxt = useNuxt()
+
+  if (options.dev === false && nuxt.options.dev) {
+    return
+  }
+  if (options.build === false && !nuxt.options.dev) {
+    return
+  }
+
+  nuxt.hook('rsbuild:config', config => fn(config))
+}
+
+/**
+ * Extend Vite config
+ */
+export function extendViteConfig (fn: ((config: ViteConfig) => Thenable<void>), options: ExtendViteConfigOptions = {}): (() => void) | undefined {
+  const nuxt = useNuxt()
+
+  if (options.dev === false && nuxt.options.dev) {
+    return
+  }
+  if (options.build === false && !nuxt.options.dev) {
+    return
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
+  if (options.server === false || options.client === false) {
+    const caller = getUserCaller()
+    const explanation = caller ? ` (used at \`${resolveAlias(caller.source)}:${caller.line}:${caller.column}\`)` : ''
+    const warning = `[@nuxt/kit] calling \`extendViteConfig\` with only server/client environment is deprecated${explanation}. Nuxt 5+ will use the Vite Environment API which shares a configuration between environments. You can likely use a Vite plugin to achieve the same result.`
+    warn(warning)
+  }
+
+  // Call fn() only once
+  return nuxt.hook('vite:extend', ({ config }) => fn(config))
+}
+
+/**
+ * Append webpack plugin to the config.
+ */
+export function addWebpackPlugin (pluginOrGetter: PluginOrGetter<WebpackPluginInstance>, options?: ExtendWebpackConfigOptions): void {
+  extendWebpackConfig(async (config) => {
+    config.plugins ||= []
+    config.plugins[insertMethod(options)](...await resolvePlugins(pluginOrGetter))
+  }, options)
+}
+/**
+ * Append rspack plugin to the config.
+ */
+export function addRspackPlugin (pluginOrGetter: PluginOrGetter<RspackCompatiblePluginInstance>, options?: ExtendWebpackConfigOptions): void {
+  extendRspackConfig(async (config) => {
+    config.plugins ||= []
+    config.plugins[insertMethod(options)](...await resolvePlugins(pluginOrGetter))
+  }, options)
+}
+
+/**
+ * Append Rsbuild plugin to the config.
+ *
+ * The plugin is registered for both the client and server environments,
+ * unless `client: false` or `server: false` is passed.
+ */
+export function addRsbuildPlugin (pluginOrGetter: PluginOrGetter<RsbuildPlugin>, options: ExtendConfigOptions = {}): void {
+  if (options.server === false && options.client === false) {
+    return
+  }
+
+  extendRsbuildConfig(async (config) => {
+    const method = insertMethod(options)
+    const plugins = await resolvePlugins(pluginOrGetter)
+
+    if (options.server !== false && options.client !== false) {
+      config.plugins ||= []
+      config.plugins[method](...plugins)
+      return
+    }
+
+    const environmentConfig = config.environments?.[options.server === false ? 'client' : 'ssr']
+    if (!environmentConfig) {
+      return
+    }
+    environmentConfig.plugins ||= []
+    environmentConfig.plugins[method](...plugins)
+  }, options)
+}
+
+/**
+ * Append Vite plugin to the config.
+ *
+ * The plugin applies to the app's environments (`client` and `ssr`), not to the `nitro`
+ * environment. For server code, add the plugin to `nuxt.options.vite.plugins` with
+ * `applyToEnvironment: environment => environment.name === 'nitro'`.
+ */
+export function addVitePlugin (pluginOrGetter: PluginOrGetter<VitePlugin>, options: ExtendConfigOptions = {}): void {
+  const nuxt = useNuxt()
+
+  if (options.dev === false && nuxt.options.dev) {
+    return
+  }
+  if (options.build === false && !nuxt.options.dev) {
+    return
+  }
+
+  let needsEnvInjection = false
+  const isIsomorphic = options.server !== false && options.client !== false
+
+  nuxt.hook('vite:extend', async ({ config }) => {
+    config.plugins ||= []
+
+    const plugin = await resolvePlugins(pluginOrGetter)
+    const method = insertMethod(options)
+
+    // Without the environment API `applyToEnvironment` is ignored, so an isomorphic
+    // plugin can be added as-is and anything else has to be injected per environment.
+    if (!config.environments?.ssr || !config.environments.client) {
+      if (isIsomorphic) {
+        config.plugins[method](...plugin)
+      } else {
+        needsEnvInjection = true
+      }
+      return
+    }
+
+    // a server environment a deploy target owns builds the app too, when the server builder
+    // says so; anything else a builder contributes (Nitro's own, one per service) does not
+    const isAppServer = (name: string) => name === 'ssr' || !!nuxt._appServerEnvironments?.has(name)
+    const isAllowed = isIsomorphic
+      ? (name: string) => name === 'client' || isAppServer(name)
+      : options.server === false
+        ? (name: string) => name === 'client'
+        : isAppServer
+    // isomorphic plugins are normally just added to plugins, so only force when `prepend` is set
+    const defaultEnforce = isIsomorphic ? (options?.prepend ? 'pre' : undefined) : (options?.prepend ? 'pre' : 'post')
+
+    config.plugins[method](...plugin.map(p => scopeToEnvironments(p, defaultEnforce, isAllowed)))
+  })
+
+  nuxt.hook('vite:extendConfig', async (config, env) => {
+    if (!needsEnvInjection) {
+      return
+    }
+    const plugin = await resolvePlugins(pluginOrGetter)
+    const method = insertMethod(options)
+    if (env.isClient && options.server === false) {
+      config.plugins![method](...plugin)
+    }
+    if (env.isServer && options.client === false) {
+      config.plugins![method](...plugin)
+    }
+  })
+}
+
+/**
+ * `addVitePlugin` has always scoped plugins to the app builds. Builders can contribute
+ * further environments (Nitro adds `nitro`, and one per service), so a plugin registered
+ * here has to opt out of any environment it wasn't registered for. The check runs per
+ * environment as Vite resolves them, so environments added after the plugin was
+ * registered are still excluded, unless the server builder has named them as app server
+ * environments by then.
+ *
+ * The plugin is returned as a top-level plugin rather than nested behind a wrapper
+ * so that Vite still applies `apply`, sorts by `enforce`, calls server-level hooks
+ * like `configureServer`, and exposes any extra properties the plugin declares
+ * (`api`, and whatever tooling scanning `config.plugins` looks for) as usual.
+ */
+function scopeToEnvironments (plugin: VitePlugin, defaultEnforce: VitePlugin['enforce'], isAllowed: (name: string) => boolean): VitePlugin {
+  const { applyToEnvironment } = plugin
+  return {
+    ...plugin,
+    enforce: plugin.enforce ?? defaultEnforce,
+    applyToEnvironment (environment) {
+      if (!isAllowed(environment.name)) {
+        return false
+      }
+      return applyToEnvironment ? applyToEnvironment(environment) : true
+    },
+  }
+}
+
+interface AddBuildPluginFactory {
+  vite?: () => Thenable<Arrayable<VitePlugin>>
+  webpack?: () => Thenable<Arrayable<WebpackPluginInstance>>
+  rsbuild?: () => Thenable<Arrayable<RsbuildPlugin>>
+  rspack?: () => Thenable<Arrayable<RspackCompatiblePluginInstance>>
+}
+
+export function addBuildPlugin (pluginFactory: AddBuildPluginFactory, options?: ExtendConfigOptions): void {
+  if (pluginFactory.vite) {
+    addVitePlugin(pluginFactory.vite, options)
+  }
+
+  if (pluginFactory.webpack) {
+    addWebpackPlugin(pluginFactory.webpack, options)
+  }
+
+  // The Rsbuild builder applies Rspack plugins in the order they are added, which the transforms of Nuxt rely on,
+  // while Rsbuild applies plugins scoped to an environment after all other plugins.
+  if (pluginFactory.rspack) {
+    addRspackPlugin(pluginFactory.rspack, options)
+  } else if (pluginFactory.rsbuild) {
+    addRsbuildPlugin(pluginFactory.rsbuild, options)
+  }
+}
+
+/**
+ * Set the build output for the given key. See {@link NuxtBuildOutputs}.
+ */
+export function setBuildOutput<K extends keyof NuxtBuildOutputs> (key: K, provider: NuxtBuildOutputs[K], nuxt: Nuxt = useNuxt()): void {
+  nuxt.buildOutputs[key] = provider
+}
