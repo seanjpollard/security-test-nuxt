@@ -41,3 +41,4 @@ overrides:
   send: ">=1.2.1"
   vite: "8.0.10"
   vue: "3.5.34"
+  '@nuxtjs/mdc@0.21.1': '0.22.1' # lockwright: GHSA-mxm6-v9r6-r94c
