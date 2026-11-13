@@ -41,3 +41,4 @@ overrides:
   send: ">=1.2.1"
   vite: "8.0.10"
   vue: "3.5.34"
+  '@simple-git/argv-parser@1.1.1': '2.0.1' # lockwright: GHSA-v5rq-49vh-5v5c
