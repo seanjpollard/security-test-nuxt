@@ -44,7 +44,7 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "0.18.2",
-    "@babel/core": "7.29.0",
+    "@babel/core": "7.29.6",
     "@babel/helper-plugin-utils": "7.28.6",
     "@codspeed/core": "5.4.0",
     "@codspeed/vitest-plugin": "5.4.0",
