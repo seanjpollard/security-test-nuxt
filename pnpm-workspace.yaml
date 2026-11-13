@@ -41,3 +41,5 @@ overrides:
   send: ">=1.2.1"
   vite: "8.0.10"
   vue: "3.5.34"
+  'glob@13.0.7': '14.0.2' # lockwright: GHSA-3g3m-2fjr-6pw4
+  'glob@10.5.0': '14.0.2' # lockwright: GHSA-3g3m-2fjr-6pw4
