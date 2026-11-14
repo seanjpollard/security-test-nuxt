@@ -26,6 +26,7 @@ overrides:
   rolldown: "1.2.18"
   vite: "8.3.7"
   vue: "3.5.45"
+  'toml@4.3.0': '5.0.1' # lockwright: GHSA-4qx8-w7c3-pj3p, GHSA-9j65-hcg3-gc64, GHSA-9qmh-m7c6-f92p, GHSA-h895-cgqg-jf52
 
 allowBuilds:
   '@parcel/watcher': true
