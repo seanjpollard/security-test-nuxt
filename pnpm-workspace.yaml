@@ -26,6 +26,8 @@ overrides:
   rolldown: "1.2.18"
   vite: "8.3.7"
   vue: "3.5.45"
+  'minimatch@10.2.6': '11.0.1' # lockwright: GHSA-g3hv-75wg-m249
+  'minimatch@3.1.5': '11.0.1' # lockwright: GHSA-g3hv-75wg-m249
 
 allowBuilds:
   '@parcel/watcher': true
