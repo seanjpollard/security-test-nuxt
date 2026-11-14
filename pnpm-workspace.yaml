@@ -41,3 +41,4 @@ overrides:
   send: ">=1.2.1"
   vite: "8.0.10"
   vue: "3.5.34"
+  'simple-git@3.36.0': '4.0.1' # lockwright: GHSA-858h-whjf-mvg5, GHSA-g4wm-2vf7-vfgr, GHSA-x6jw-m9v5-85vh
