@@ -7,7 +7,7 @@ import { useNuxtApp } from '../nuxt'
 import { getUserCaller, toArray } from '../utils'
 import { clientOnlySymbol } from '../components/client-only'
 import type { NuxtError } from './error'
-import { createError } from './error'
+import { createError, isUntrustedError } from './error'
 import { onNuxtReady } from './ready'
 import { traceAsync } from '../internal/tracing'
 import { defineKeyedFunctionFactory } from '../../compiler/runtime'
@@ -1011,7 +1011,9 @@ function buildAsyncData<
             return
           }
 
-          asyncData.error.value = createError<NuxtErrorDataT>(error) as (NuxtErrorDataT extends Error | NuxtError ? NuxtErrorDataT : NuxtError<NuxtErrorDataT>)
+          asyncData.error.value = (import.meta.server && !import.meta.dev && isUntrustedError(error)
+            ? createError({ status: 500, statusText: 'Internal Server Error' })
+            : createError<NuxtErrorDataT>(error)) as (NuxtErrorDataT extends Error | NuxtError ? NuxtErrorDataT : NuxtError<NuxtErrorDataT>)
           asyncData.data.value = unref(options.default!())
           asyncData.status.value = 'error'
         })
