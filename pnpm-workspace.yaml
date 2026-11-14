@@ -41,3 +41,4 @@ overrides:
   send: ">=1.2.1"
   vite: "8.0.10"
   vue: "3.5.34"
+  'js-yaml@4.1.1': '4.3.2' # lockwright: GHSA-2883-xcg3-v3hh, GHSA-52cp-r559-cp3m, GHSA-5p4m-2wfm-xmqj, GHSA-h67p-54hq-rp68
