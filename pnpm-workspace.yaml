@@ -41,3 +41,5 @@ overrides:
   send: ">=1.2.1"
   vite: "8.0.10"
   vue: "3.5.34"
+  '@vitest/mocker@4.1.5': '4.1.12' # lockwright: GHSA-82fw-gwwq-j7x9, GHSA-qxg6-89mg-rqv8
+  '@vitest/mocker@4.0.18': '4.1.12' # lockwright: GHSA-82fw-gwwq-j7x9, GHSA-qxg6-89mg-rqv8
