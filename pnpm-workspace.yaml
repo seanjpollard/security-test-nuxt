@@ -41,3 +41,8 @@ overrides:
   send: ">=1.2.1"
   vite: "8.0.10"
   vue: "3.5.34"
+  'minimatch@10.2.6': '11.0.1' # lockwright: GHSA-23c5-xmqv-rm74, GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj, GHSA-g3hv-75wg-m249
+  'minimatch@3.1.5': '11.0.1' # lockwright: GHSA-23c5-xmqv-rm74, GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj, GHSA-g3hv-75wg-m249
+  'minimatch@3.0.8': '11.0.1' # lockwright: GHSA-23c5-xmqv-rm74, GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj, GHSA-g3hv-75wg-m249
+  'minimatch@5.1.9': '11.0.1' # lockwright: GHSA-23c5-xmqv-rm74, GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj, GHSA-g3hv-75wg-m249
+  'minimatch@9.0.9': '11.0.1' # lockwright: GHSA-23c5-xmqv-rm74, GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj, GHSA-g3hv-75wg-m249
