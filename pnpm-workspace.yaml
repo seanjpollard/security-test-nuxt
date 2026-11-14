@@ -26,6 +26,8 @@ overrides:
   rolldown: "1.2.18"
   vite: "8.3.7"
   vue: "3.5.45"
+  'katex@0.16.47': '0.18.2' # lockwright: GHSA-238p-pmpm-9mq7
+  're2js@2.8.6': '2.8.7' # lockwright: GHSA-gg6h-894w-4m9c
 
 allowBuilds:
   '@parcel/watcher': true
